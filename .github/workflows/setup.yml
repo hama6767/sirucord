@@ -6,6 +6,10 @@ on:
         description: Enable the limited Gateway intents required by this configuration
         type: boolean
         default: false
+      check_preview:
+        description: Test stream preview access once with the existing bot (no posts)
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -30,3 +34,19 @@ jobs:
           else
             python3 scripts/check_setup.py
           fi
+      - name: Test stream preview access
+        if: inputs.check_preview
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          SIRUCORD_CONFIG: ${{ secrets.SIRUCORD_CONFIG }}
+        run: |
+          node --test scripts/test_preview.mjs
+          python3 - <<'PY'
+          import json, os, tomllib
+          try:
+              config = tomllib.loads(os.environ.pop("SIRUCORD_CONFIG"))
+              os.environ["PREVIEW_TARGETS"] = json.dumps(config.get("servers", []))
+          except Exception:
+              raise SystemExit("Invalid preview configuration (details redacted).")
+          os.execvp("node", ["node", "scripts/check_preview.mjs"])
+          PY

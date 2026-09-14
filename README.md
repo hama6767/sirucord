@@ -196,6 +196,8 @@ sirucord --github-state resolve --target GUILD_ID:USER_ID --retry
 
 ## ローカル開発・実行
 
+配信サムネイルの取得可否は、Actionsの **Check Discord installation** を手動実行し、`check_preview` を有効にして診断できます。現在配信中の監視対象ユーザー1人について、既存のBot認証で内部プレビューAPIを1回だけ呼び出します。配信がない場合は判定できません。結果はHTTPステータスとDiscordエラーコードだけを記録し、画像URL・ユーザーID・認証情報を公開しません。画像が取得できても保存・投稿せず、定期監視にも追加しません。これは非公開APIの診断であり、サムネイル取得に対応したことを意味しません。
+
 Rust 1.98.1でCIを実行しています。
 
 ```sh
