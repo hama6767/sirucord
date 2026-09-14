@@ -26,6 +26,8 @@ impl Default for State {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Entry {
+    #[serde(default)]
+    pub metadata_fingerprint: Option<String>,
     pub session_id: String,
     pub first_seen: DateTime<Utc>,
     pub announced: bool,
@@ -36,6 +38,8 @@ pub struct Entry {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Pending {
+    #[serde(default)]
+    pub metadata_fingerprint: Option<String>,
     pub key: String,
     pub text: String,
     pub attachment: Option<discord::Attachment>,
@@ -97,13 +101,30 @@ impl App {
             observed.len(),
             active
         );
+        let contexts: Vec<_> = observed
+            .values()
+            .filter_map(|(_, voice)| voice.as_ref()?.context.as_ref())
+            .collect();
+        if !contexts.is_empty() {
+            println!(
+                "Automatic metadata: {} stream(s) with activity details; {} with artwork.",
+                contexts.iter().filter(|c| !c.activities.is_empty()).count(),
+                contexts.iter().filter(|c| c.artwork().is_some()).count()
+            );
+        }
         for (key, (streamer, voice)) in observed {
             // Finish an in-flight write even when the stream has ended. Text says
             // 'detected a start' and carries no claim of being live right now.
             if state.entries.get(&key).is_some_and(|e| e.pending.is_some()) {
                 let entry = &state.entries[&key];
                 let pending = entry.pending.as_ref().unwrap();
-                if pending.attachment.is_some() && pending.media_id.is_none() && !dry_run {
+                if pending
+                    .attachment
+                    .as_ref()
+                    .is_some_and(|a| a.source == discord::ImageSource::DiscordAttachment)
+                    && pending.media_id.is_none()
+                    && !dry_run
+                {
                     let channel = streamer.announcement_channel_id.as_ref().ok_or_else(|| {
                         anyhow::anyhow!("Pending image requires its announcement channel")
                     })?;
@@ -139,6 +160,7 @@ impl App {
                 state.entries.insert(
                     key.clone(),
                     Entry {
+                        metadata_fingerprint: None,
                         session_id: voice.session_id.clone(),
                         first_seen: now,
                         announced: false,
@@ -150,6 +172,43 @@ impl App {
             }
             let entry = state.entries.get(&key).expect("entry inserted");
             let start = !entry.announced;
+            if let Some(context) = &voice.context {
+                let channel = voice
+                    .channel_id
+                    .as_deref()
+                    .expect("active voice has channel");
+                let fingerprint = context.fingerprint(channel);
+                if !metadata_due(
+                    entry,
+                    &fingerprint,
+                    now,
+                    self.config.activity_update_interval_minutes,
+                ) {
+                    continue;
+                }
+                let pending = Pending {
+                    key: uuid::Uuid::new_v4().to_string(),
+                    text: context.render(
+                        &streamer.display_name,
+                        &streamer.guild_id,
+                        channel,
+                        start,
+                    ),
+                    attachment: context.artwork(),
+                    media_id: None,
+                    attempted_at: None,
+                    is_start: start,
+                    metadata_fingerprint: Some(fingerprint),
+                };
+                // Automatic mode does not read announcement messages or require
+                // captions/uploads, even if a legacy channel is configured.
+                state.entries.get_mut(&key).unwrap().pending = Some(pending);
+                if !dry_run {
+                    self.store.save(&state).await?;
+                }
+                self.deliver(&mut state, &key, dry_run).await?;
+                continue;
+            }
             let due = streamer.screenshots
                 && entry.last_post.is_none_or(|t| {
                     now.signed_duration_since(t).num_seconds()
@@ -193,6 +252,7 @@ impl App {
                 )
             };
             let pending = Pending {
+                metadata_fingerprint: None,
                 key: uuid::Uuid::new_v4().to_string(),
                 text,
                 attachment,
@@ -219,6 +279,8 @@ impl App {
                 "Dry run: would publish {} (content redacted).",
                 if pending.is_start {
                     "start announcement"
+                } else if pending.metadata_fingerprint.is_some() {
+                    "stream information update"
                 } else {
                     "screenshot"
                 }
@@ -237,14 +299,21 @@ impl App {
         if let Some(attachment) = &pending.attachment
             && pending.media_id.is_none()
         {
-            pending.media_id = Some(
-                self.mastodon
-                    .upload(
-                        attachment,
-                        "配信者本人が共有したDiscord配信のスクリーンショット",
-                    )
-                    .await?,
-            );
+            let artwork = attachment.source == discord::ImageSource::ActivityAsset;
+            let description = if artwork {
+                "Discord Rich Presenceで公開されているゲームの画像（配信のスクリーンショットではありません）"
+            } else {
+                "配信者本人が共有したDiscord配信のスクリーンショット"
+            };
+            match self.mastodon.upload(attachment, description).await {
+                Ok(id) => pending.media_id = Some(id),
+                Err(_) if artwork => {
+                    // Decoration must never prevent automatic content delivery.
+                    println!("Activity artwork unavailable; publishing metadata without image.");
+                    pending.attachment = None;
+                }
+                Err(error) => return Err(error),
+            }
             state.entries.get_mut(key).unwrap().pending = Some(pending.clone());
             self.store.save(state).await?;
         }
@@ -263,6 +332,8 @@ impl App {
             "Published {} successfully.",
             if pending.is_start {
                 "start announcement"
+            } else if pending.metadata_fingerprint.is_some() {
+                "stream information update"
             } else {
                 "screenshot"
             }
@@ -274,12 +345,31 @@ impl App {
 pub fn complete(state: &mut State, key: &str, now: DateTime<Utc>) {
     let entry = state.entries.get_mut(key).expect("entry exists");
     if let Some(pending) = entry.pending.take() {
+        if let Some(fingerprint) = pending.metadata_fingerprint {
+            entry.metadata_fingerprint = Some(fingerprint);
+        }
         if pending.is_start {
             entry.announced = true;
         }
-        if let Some(attachment) = pending.attachment {
+        if let Some(attachment) = pending.attachment
+            && attachment.source == discord::ImageSource::DiscordAttachment
+        {
             entry.last_attachment = Some(attachment.id);
         }
         entry.last_post = Some(now);
     }
+}
+
+pub fn metadata_due(
+    entry: &Entry,
+    fingerprint: &str,
+    now: DateTime<Utc>,
+    interval_minutes: u64,
+) -> bool {
+    !entry.announced
+        || entry.metadata_fingerprint.is_none()
+        || (entry.metadata_fingerprint.as_deref() != Some(fingerprint)
+            && entry.last_post.is_none_or(|last| {
+                now.signed_duration_since(last).num_seconds() >= interval_minutes as i64 * 60
+            }))
 }

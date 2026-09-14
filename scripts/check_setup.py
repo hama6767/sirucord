@@ -45,7 +45,7 @@ def main():
     print("Bot installation link: " + invite)
     print("Bot settings: https://discord.com/developers/applications/" + application_id + "/bot")
     targets = config.get("servers", []) + config.get("streamers", [])
-    message_content = any(t.get("announcement_channel_id") for t in targets)
+    message_content = any(t.get("announcement_channel_id") and not t.get("use_activity") for t in targets)
     presence = any(t.get("use_activity") for t in targets)
     flags = int(app.get("flags", 0))
     required = 0
@@ -79,7 +79,7 @@ def main():
                 print(f"Target {number}: voice channel is missing, inaccessible or in another server (HTTP {status}).")
                 issues += 1
         channel = target.get("announcement_channel_id")
-        if channel:
+        if channel and not target.get("use_activity"):
             status, data = request("/channels/" + channel)
             if status != 200 or data.get("guild_id") != target["guild_id"]:
                 print(f"Target {number}: announcement channel is missing, inaccessible or in another server (HTTP {status}).")

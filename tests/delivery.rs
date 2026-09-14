@@ -213,12 +213,14 @@ async fn uncertain_old_delivery_stops_instead_of_reposting() {
     state.entries.insert(
         "1:2".into(),
         Entry {
+            metadata_fingerprint: None,
             session_id: "session".into(),
             first_seen: Utc::now(),
             announced: false,
             last_post: None,
             last_attachment: None,
             pending: Some(Pending {
+                metadata_fingerprint: None,
                 key: "key".into(),
                 text: "announcement".into(),
                 attachment: None,
@@ -389,4 +391,64 @@ async fn github_state_roundtrip_preserves_encryption_and_uses_revision_sha() {
     .unwrap();
     assert!(envelope.starts_with("sirucord-state-v1:"));
     assert!(!envelope.contains("entries"));
+}
+
+#[test]
+fn metadata_changes_are_throttled_unchanged_information_never_reposts() {
+    use sirucord::engine::metadata_due;
+    let now = Utc::now();
+    let mut entry = Entry {
+        metadata_fingerprint: Some("old".into()),
+        session_id: "session".into(),
+        first_seen: now - Duration::hours(2),
+        announced: true,
+        last_post: Some(now - Duration::minutes(29)),
+        last_attachment: None,
+        pending: None,
+    };
+    assert!(!metadata_due(&entry, "new", now, 30));
+    assert!(metadata_due(&entry, "new", now + Duration::minutes(1), 30));
+    assert!(!metadata_due(&entry, "old", now + Duration::days(10), 30));
+    entry.metadata_fingerprint = None; // migrate one time from v0.1.0
+    assert!(metadata_due(&entry, "new", now, 30));
+}
+
+#[tokio::test]
+async fn metadata_delivery_persists_fingerprint_and_does_not_read_chat() {
+    let server = MockServer::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app(&server, &dir).await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/statuses"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id":"metadata-post"})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let mut state:State=serde_json::from_value(json!({"version":1,"entries":{"1:2":{"session_id":"old-session","first_seen":Utc::now(),"announced":true,"last_post":null,"last_attachment":null,"pending":null}}})).unwrap();
+    // Old encrypted state has neither of the new fields.
+    assert!(state.entries["1:2"].metadata_fingerprint.is_none());
+    state.entries.get_mut("1:2").unwrap().pending = Some(Pending {
+        key: "metadata-key".into(),
+        text: "automatic game details".into(),
+        attachment: None,
+        media_id: None,
+        attempted_at: None,
+        is_start: false,
+        metadata_fingerprint: Some("new-details".into()),
+    });
+    app.store.save(&state).await.unwrap();
+    app.deliver(&mut state, "1:2", false).await.unwrap();
+    let reloaded = app.store.load().await.unwrap();
+    assert_eq!(
+        reloaded.entries["1:2"].metadata_fingerprint.as_deref(),
+        Some("new-details")
+    );
+    assert!(
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .all(|request| request.method == "POST")
+    );
 }

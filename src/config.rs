@@ -12,6 +12,8 @@ pub struct Config {
     pub servers: Vec<Server>,
     #[serde(default = "interval")]
     pub screenshot_interval_minutes: u64,
+    #[serde(default = "interval")]
+    pub activity_update_interval_minutes: u64,
 }
 
 #[derive(Clone, Deserialize)]
@@ -103,6 +105,10 @@ impl Config {
             (5..=1440).contains(&self.screenshot_interval_minutes),
             "screenshot interval must be 5–1440 minutes"
         );
+        ensure!(
+            (30..=1440).contains(&self.activity_update_interval_minutes),
+            "Activity update interval must be 30–1440 minutes"
+        );
         let mut keys = HashSet::new();
         let mut guilds = HashSet::new();
         for s in &self.servers {
@@ -185,7 +191,7 @@ mod tests {
         for bad in [
             example.replace("https://mastodon.social", "http://mastodon.social"),
             example.replace("https://mastodon.social", "https://secret@mastodon.social"),
-            example.replace("screenshots = true", "screenshot = true"),
+            example.replace("screenshots = false", "screenshot = false"),
             example.replace(
                 "voice_channel_ids = [\"345678901234567890\"]",
                 "voice_channel_ids = []",

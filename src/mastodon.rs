@@ -29,7 +29,14 @@ impl Mastodon {
     }
 
     pub async fn upload(&self, attachment: &Attachment, description: &str) -> Result<String> {
-        validate_attachment_url(&attachment.url)?;
+        match attachment.source {
+            crate::discord::ImageSource::DiscordAttachment => {
+                validate_attachment_url(&attachment.url)?
+            }
+            crate::discord::ImageSource::ActivityAsset => {
+                validate_activity_asset_url(&attachment.url)?
+            }
+        }
         // A separate unauthenticated request never sends the Mastodon/Discord token to a CDN.
         let mut response = http::success(
             http::send(|| self.client.get(&attachment.url)).await?,
@@ -137,6 +144,27 @@ fn validate_attachment_url(value: &str) -> Result<()> {
     Ok(())
 }
 
+fn validate_activity_asset_url(value: &str) -> Result<()> {
+    let url =
+        reqwest::Url::parse(value).map_err(|_| anyhow::anyhow!("Invalid activity asset URL"))?;
+    let parts: Vec<_> = url.path().split('/').collect();
+    ensure!(
+        url.scheme() == "https"
+            && url.host_str() == Some("cdn.discordapp.com")
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.port_or_known_default() == Some(443)
+            && parts.len() == 4
+            && parts[1] == "app-assets"
+            && crate::activity::snowflake(parts[2])
+            && parts[3]
+                .strip_suffix(".png")
+                .is_some_and(crate::activity::snowflake),
+        "Only official Discord application assets are accepted"
+    );
+    Ok(())
+}
+
 fn image_type(bytes: &[u8]) -> Option<(&'static str, &'static str)> {
     if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         Some(("image/png", "screenshot.png"))
@@ -211,6 +239,20 @@ mod tests {
     }
     #[test]
     fn rejects_untrusted_media_and_active_content() {
+        assert!(
+            validate_activity_asset_url(
+                "https://cdn.discordapp.com/app-assets/123/456.png?size=512"
+            )
+            .is_ok()
+        );
+        for url in [
+            "https://example.com/app-assets/123/456.png",
+            "https://cdn.discordapp.com/app-assets/a/456.png",
+            "https://cdn.discordapp.com/app-assets/123/../456.png",
+            "https://cdn.discordapp.com/attachments/123/456.png",
+        ] {
+            assert!(validate_activity_asset_url(url).is_err());
+        }
         for url in [
             "http://127.0.0.1/attachments/a",
             "https://cdn.discordapp.com.evil.test/attachments/a",

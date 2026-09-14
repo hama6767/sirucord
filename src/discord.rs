@@ -22,6 +22,8 @@ pub struct Discord {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Voice {
+    #[serde(skip)]
+    pub context: Option<crate::activity::StreamContext>,
     pub channel_id: Option<String>,
     pub session_id: String,
     #[serde(default)]
@@ -37,10 +39,20 @@ pub struct User {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Attachment {
+    #[serde(default)]
+    pub source: ImageSource,
     pub id: String,
     pub url: String,
     pub content_type: Option<String>,
     pub size: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageSource {
+    #[default]
+    DiscordAttachment,
+    ActivityAsset,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -221,7 +233,7 @@ pub fn parse_guild(server: &Server, data: &Value) -> Result<Vec<(Streamer, Voice
         .as_array()
         .context("Missing guild voice states")?
     {
-        let voice: Voice = serde_json::from_value(raw.clone())?;
+        let mut voice: Voice = serde_json::from_value(raw.clone())?;
         if !voice.self_stream
             || !voice
                 .channel_id
@@ -231,6 +243,13 @@ pub fn parse_guild(server: &Server, data: &Value) -> Result<Vec<(Streamer, Voice
             continue;
         }
         let id = raw["user_id"].as_str().context("Missing voice user ID")?;
+        if server.use_activity {
+            voice.context = Some(crate::activity::StreamContext::from_guild(
+                data,
+                id,
+                voice.channel_id.as_deref().unwrap(),
+            ));
+        }
         let member = members
             .get(id)
             .context("Streaming member absent from snapshot; retry later")?;
