@@ -6,6 +6,8 @@ use sha2::{Digest, Sha256};
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct StreamContext {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub avatars: Vec<crate::avatars::Avatar>,
     /// Nonempty only for an occupied channel without a human stream.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub voice_members: Vec<String>,
@@ -26,7 +28,8 @@ pub struct Activity {
 }
 
 impl StreamContext {
-    pub fn from_guild(data: &Value, user: &str, channel: &str) -> Self {
+    pub fn from_guild(data: &Value, user: &str, channel: &str) -> anyhow::Result<Self> {
+        use anyhow::Context;
         let channel_name = data["channels"]
             .as_array()
             .and_then(|items| items.iter().find(|c| c["id"] == channel))
@@ -34,22 +37,29 @@ impl StreamContext {
             .map(|s| clean(s, 40))
             .unwrap_or_else(|| "ボイスチャンネル".into());
         let members = data["members"].as_array();
-        let participants = data["voice_states"]
+        let mut roster = Vec::new();
+        for voice in data["voice_states"]
             .as_array()
-            .map(|states| {
-                states
-                    .iter()
-                    .filter(|v| {
-                        v["channel_id"] == channel
-                            && !members.is_some_and(|items| {
-                                items.iter().any(|m| {
-                                    m["user"]["id"] == v["user_id"] && m["user"]["bot"] == true
-                                })
-                            })
-                    })
-                    .count()
-            })
-            .unwrap_or(0);
+            .context("Missing voice states")?
+        {
+            if voice["channel_id"] != channel {
+                continue;
+            }
+            let member = members
+                .and_then(|items| items.iter().find(|m| m["user"]["id"] == voice["user_id"]))
+                .context("Voice member absent from snapshot; retry later")?;
+            if member["user"]["bot"] == true {
+                continue;
+            }
+            let id = member["user"]["id"].as_str().context("Missing member ID")?;
+            roster.push((
+                id,
+                crate::avatars::member_avatar(member, data["id"].as_str().unwrap_or(""))?,
+            ));
+        }
+        roster.sort_by_key(|(id, _)| *id);
+        let avatars: Vec<_> = roster.into_iter().map(|(_, avatar)| avatar).collect();
+        let participants = avatars.len();
         let mut activities: Vec<_> = data["presences"]
             .as_array()
             .and_then(|items| items.iter().find(|p| p["user"]["id"] == user))
@@ -61,15 +71,19 @@ impl StreamContext {
         // Canonical ordering prevents updates caused only by array ordering.
         activities.sort_by(|a, b| (a.kind, &a.name).cmp(&(b.kind, &b.name)));
         activities.truncate(2);
-        Self {
+        Ok(Self {
+            avatars,
             voice_members: Vec::new(),
             channel_name,
             participants,
             activities,
-        }
+        })
     }
 
     pub fn fingerprint(&self, channel_id: &str) -> String {
+        if self.participants == 1 {
+            return format!("solo-v1:{channel_id}");
+        }
         // Timestamps, viewers (unavailable), arbitrary URLs and RP secrets are
         // deliberately absent; elapsed time must not produce periodic posts.
         let data = serde_json::to_vec(&(channel_id, self)).expect("serializable context");
@@ -77,10 +91,16 @@ impl StreamContext {
     }
 
     pub fn artwork(&self) -> Option<Attachment> {
+        if self.participants == 1 || !self.avatars.is_empty() {
+            return None;
+        }
         self.activities.iter().find_map(|a| a.artwork.clone())
     }
 
     pub fn render(&self, name: &str, start: bool) -> String {
+        if self.participants == 1 {
+            return "汁が開始されました！集合汁！".into();
+        }
         let name = clean(name, 60);
         let heading = if !self.voice_members.is_empty() {
             if start {
@@ -203,12 +223,21 @@ mod tests {
     }
     #[test]
     fn extracts_automatic_details_without_unrelated_activity_or_secrets() {
-        let context = StreamContext::from_guild(&guild(), "20", "10");
-        assert_eq!(context.participants, 1);
+        let mut data = guild();
+        data["members"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"user":{"id":"22"}}));
+        data["voice_states"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"user_id":"22","channel_id":"10"}));
+        let context = StreamContext::from_guild(&data, "20", "10").unwrap();
+        assert_eq!(context.participants, 2);
         assert_eq!(context.activities.len(), 1);
         let text = context.render("User", true);
         assert!(!text.contains("https://discord.com/channels/"));
-        for field in ["Ranked match", "Map A", "Round 2", "2/4", "通話参加 1人"] {
+        for field in ["Ranked match", "Map A", "Round 2", "2/4", "通話参加 2人"] {
             assert!(text.contains(field));
         }
         assert!(
@@ -216,8 +245,9 @@ mod tests {
                 && !serde_json::to_string(&context).unwrap().contains("secret")
         );
         assert!(
-            context
-                .artwork()
+            context.activities[0]
+                .artwork
+                .as_ref()
                 .unwrap()
                 .url
                 .ends_with("/30/40.png?size=512")
@@ -225,18 +255,32 @@ mod tests {
     }
     #[test]
     fn fingerprints_ignore_clock_and_detect_real_content_changes() {
-        let original = guild();
+        let mut original = guild();
+        original["members"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"user":{"id":"22"}}));
+        original["voice_states"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"user_id":"22","channel_id":"10"}));
         let mut changed = original.clone();
         changed["presences"][0]["activities"][0]["timestamps"]["start"] = json!(9999);
-        let first = StreamContext::from_guild(&original, "20", "10").fingerprint("10");
+        let first = StreamContext::from_guild(&original, "20", "10")
+            .unwrap()
+            .fingerprint("10");
         assert_eq!(
             first,
-            StreamContext::from_guild(&changed, "20", "10").fingerprint("10")
+            StreamContext::from_guild(&changed, "20", "10")
+                .unwrap()
+                .fingerprint("10")
         );
         changed["presences"][0]["activities"][0]["state"] = json!("Map B");
         assert_ne!(
             first,
-            StreamContext::from_guild(&changed, "20", "10").fingerprint("10")
+            StreamContext::from_guild(&changed, "20", "10")
+                .unwrap()
+                .fingerprint("10")
         );
     }
     #[test]
@@ -244,13 +288,38 @@ mod tests {
         let mut data = guild();
         data["presences"][0]["activities"][0]["assets"]["large_image"] = json!("../../private");
         data["presences"][0]["activities"][0]["details"] = json!("あ".repeat(1000));
-        let context = StreamContext::from_guild(&data, "20", "10");
+        data["members"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"user":{"id":"22"}}));
+        data["voice_states"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"user_id":"22","channel_id":"10"}));
+        let context = StreamContext::from_guild(&data, "20", "10").unwrap();
         assert!(context.artwork().is_none());
         assert!(context.render(&"名".repeat(1000), false).chars().count() <= 480);
         assert!(
             StreamContext::from_guild(&data, "missing", "10")
+                .unwrap()
                 .render("User", true)
                 .contains("取得できません")
         );
+    }
+    #[test]
+    fn alone_posts_only_exact_phrase_and_ignores_activity_changes() {
+        let data = guild();
+        let mut context = StreamContext::from_guild(&data, "20", "10").unwrap();
+        assert_eq!(context.render("User", true), "汁が開始されました！集合汁！");
+        assert_eq!(
+            context.render("User", false),
+            "汁が開始されました！集合汁！"
+        );
+        assert!(context.artwork().is_none());
+        let fingerprint = context.fingerprint("10");
+        context.activities.clear();
+        context.voice_members = vec!["User".into()];
+        assert_eq!(context.fingerprint("10"), fingerprint);
+        assert_eq!(context.render("User", true), "汁が開始されました！集合汁！");
     }
 }

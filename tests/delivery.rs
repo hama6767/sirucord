@@ -226,6 +226,7 @@ async fn uncertain_old_delivery_stops_instead_of_reposting() {
             last_post: None,
             last_attachment: None,
             pending: Some(Pending {
+                avatars: Vec::new(),
                 metadata_fingerprint: None,
                 key: "key".into(),
                 text: "announcement".into(),
@@ -420,6 +421,65 @@ fn metadata_changes_are_throttled_unchanged_information_never_reposts() {
 }
 
 #[tokio::test]
+async fn participant_icons_upload_once_and_survive_status_retry() {
+    let server = MockServer::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app(&server, &dir).await;
+    let mut state: State = serde_json::from_value(json!({"version":1,"entries":{"1:voice-3":{
+        "session_id":"voice-3","first_seen":Utc::now(),"announced":false,"last_post":null,"last_attachment":null,
+        "pending":{"key":"icons-key","text":"参加者：Alice、Bob","attachment":null,"media_id":null,"attempted_at":null,"is_start":true,"metadata_fingerprint":"two-people",
+        "avatars":[{"name":"Alice","url":"http://invalid.local/a.png"},{"name":"Bob","url":"http://invalid.local/b.png"}]}
+    }}})).unwrap();
+    Mock::given(method("POST"))
+        .and(path("/api/v2/media"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"id":"icons","url":"https://example.org/icons.png"})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/statuses"))
+        .respond_with(ResponseTemplate::new(400))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    assert!(app.deliver(&mut state, "1:voice-3", false).await.is_err());
+    let mut reloaded = app.store.load().await.unwrap();
+    assert_eq!(
+        reloaded.entries["1:voice-3"]
+            .pending
+            .as_ref()
+            .unwrap()
+            .media_id
+            .as_deref(),
+        Some("icons")
+    );
+    Mock::given(method("POST"))
+        .and(path("/api/v1/statuses"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id":"posted"})))
+        .mount(&server)
+        .await;
+    app.deliver(&mut reloaded, "1:voice-3", false)
+        .await
+        .unwrap();
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 3);
+    let upload = String::from_utf8_lossy(&requests[0].body);
+    assert!(
+        upload.contains("image/png")
+            && upload.contains("Alice、Bob")
+            && upload.contains("灰色の人型")
+    );
+    for request in &requests[1..] {
+        let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+        assert_eq!(body["media_ids"], json!(["icons"]));
+        assert_eq!(request.headers["idempotency-key"], "icons-key");
+    }
+}
+
+#[tokio::test]
 async fn metadata_delivery_persists_fingerprint_and_does_not_read_chat() {
     let server = MockServer::start().await;
     let dir = tempfile::tempdir().unwrap();
@@ -434,6 +494,7 @@ async fn metadata_delivery_persists_fingerprint_and_does_not_read_chat() {
     // Old encrypted state has neither of the new fields.
     assert!(state.entries["1:2"].metadata_fingerprint.is_none());
     state.entries.get_mut("1:2").unwrap().pending = Some(Pending {
+        avatars: Vec::new(),
         key: "metadata-key".into(),
         text: "automatic game details\nhttps://discord.com/channels/1/3".into(),
         attachment: None,

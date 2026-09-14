@@ -39,6 +39,8 @@ pub struct Entry {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Pending {
     #[serde(default)]
+    pub avatars: Vec<crate::avatars::Avatar>,
+    #[serde(default)]
     pub metadata_fingerprint: Option<String>,
     pub key: String,
     pub text: String,
@@ -195,6 +197,11 @@ impl App {
                     continue;
                 }
                 let pending = Pending {
+                    avatars: if context.participants >= 2 {
+                        context.avatars.clone()
+                    } else {
+                        Vec::new()
+                    },
                     key: uuid::Uuid::new_v4().to_string(),
                     text: context.render(&streamer.display_name, start),
                     attachment: context.artwork(),
@@ -248,6 +255,7 @@ impl App {
                 format!("📷 {name} さんから配信スクリーンショット\n内容：{title}")
             };
             let pending = Pending {
+                avatars: Vec::new(),
                 metadata_fingerprint: None,
                 key: uuid::Uuid::new_v4().to_string(),
                 text,
@@ -306,6 +314,13 @@ impl App {
             bail!(
                 "Uncertain Mastodon delivery is older than 55 minutes. Inspect the destination account, then use resolve --target GUILD:USER --posted or --retry. State preserved; automatic duplicate posting stopped."
             );
+        }
+        if !pending.avatars.is_empty() && pending.media_id.is_none() {
+            let (bytes, description) =
+                crate::avatars::collage(&self.mastodon.client, &pending.avatars).await?;
+            pending.media_id = Some(self.mastodon.upload_bytes(bytes, &description).await?);
+            state.entries.get_mut(key).unwrap().pending = Some(pending.clone());
+            self.store.save(state).await?;
         }
         if let Some(attachment) = &pending.attachment
             && pending.media_id.is_none()

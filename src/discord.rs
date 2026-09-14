@@ -243,18 +243,24 @@ pub fn parse_guild(server: &Server, data: &Value) -> Result<Vec<(Streamer, Voice
             continue;
         }
         let id = raw["user_id"].as_str().context("Missing voice user ID")?;
-        if server.use_activity {
-            voice.context = Some(crate::activity::StreamContext::from_guild(
-                data,
-                id,
-                voice.channel_id.as_deref().unwrap(),
-            ));
-        }
         let member = members
             .get(id)
             .context("Streaming member absent from snapshot; retry later")?;
         if member["user"]["bot"] == true {
             continue;
+        }
+        let context = crate::activity::StreamContext::from_guild(
+            data,
+            id,
+            voice.channel_id.as_deref().unwrap(),
+        )?;
+        // Keep a single stable channel target while alone, even if Go Live is
+        // toggled. This prevents repeating the same gathering announcement.
+        if context.participants == 1 {
+            continue;
+        }
+        if server.use_activity {
+            voice.context = Some(context);
         }
         let name = member["nick"]
             .as_str()
@@ -287,45 +293,19 @@ pub fn parse_guild(server: &Server, data: &Value) -> Result<Vec<(Streamer, Voice
         {
             continue;
         }
-        let mut names = Vec::new();
-        for raw in data["voice_states"]
-            .as_array()
-            .context("Missing guild voice states")?
-        {
-            if raw["channel_id"].as_str() != Some(channel) {
-                continue;
-            }
-            let id = raw["user_id"].as_str().context("Missing voice user ID")?;
-            let member = members
-                .get(id)
-                .context("Voice member absent from snapshot; retry later")?;
-            if member["user"]["bot"] == true {
-                continue;
-            }
-            names.push(clean(
-                member["nick"]
-                    .as_str()
-                    .or(member["user"]["global_name"].as_str())
-                    .or(member["user"]["username"].as_str())
-                    .unwrap_or("Discord参加者"),
-                60,
-            ));
-        }
-        if names.is_empty() {
+        let mut context = crate::activity::StreamContext::from_guild(data, "", channel)?;
+        if context.participants == 0 {
             continue;
         }
-        names.sort();
-        let context = crate::activity::StreamContext {
-            channel_name: channels
-                .iter()
-                .find(|c| c["id"].as_str() == Some(channel))
-                .and_then(|c| c["name"].as_str())
-                .map(|s| clean(s, 40))
-                .unwrap_or_else(|| "ボイスチャンネル".into()),
-            participants: names.len(),
-            voice_members: names,
-            activities: Vec::new(),
-        };
+        context.voice_members = context.avatars.iter().map(|a| a.name.clone()).collect();
+        let streaming = data["voice_states"].as_array().unwrap().iter().any(|v| {
+            v["channel_id"].as_str() == Some(channel)
+                && v["self_stream"] == true
+                && v["user_id"]
+                    .as_str()
+                    .and_then(|id| members.get(id))
+                    .is_some_and(|m| m["user"]["bot"] != true)
+        });
         result.push((
             Streamer {
                 guild_id: server.guild_id.clone(),
@@ -339,7 +319,7 @@ pub fn parse_guild(server: &Server, data: &Value) -> Result<Vec<(Streamer, Voice
             Voice {
                 channel_id: Some(channel.clone()),
                 session_id: format!("voice-{channel}"),
-                self_stream: false,
+                self_stream: streaming,
                 context: Some(context),
             },
         ));
@@ -497,7 +477,11 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].0.display_name, "Streamer");
+        assert_eq!(result[0].0.key(), "1:voice-2");
+        assert_eq!(
+            result[0].1.context.as_ref().unwrap().render("", true),
+            "汁が開始されました！集合汁！"
+        );
         peer.await.unwrap();
     }
 
@@ -615,7 +599,19 @@ mod tests {
         let data = json!({"channels":[{"id":"2"}],"members":[{"user":{"id":"3","username":"name"},"nick":"nickname"},{"user":{"id":"4","bot":true}}],"voice_states":[{"user_id":"3","channel_id":"2","session_id":"s","self_stream":true},{"user_id":"4","channel_id":"2","session_id":"b","self_stream":true},{"user_id":"5","channel_id":"9","session_id":"x","self_stream":true}]});
         let found = parse_guild(&server, &data).unwrap();
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0].0.display_name, "nickname");
+        assert_eq!(
+            found[0].1.context.as_ref().unwrap().voice_members,
+            vec!["nickname"]
+        );
+        let mut stopped = data.clone();
+        stopped["voice_states"][0]["self_stream"] = json!(false);
+        let stopped = parse_guild(&server, &stopped).unwrap();
+        assert_eq!(found[0].0.key(), stopped[0].0.key());
+        assert_eq!(found[0].1.session_id, stopped[0].1.session_id);
+        assert_eq!(
+            found[0].1.context.as_ref().unwrap().fingerprint("2"),
+            stopped[0].1.context.as_ref().unwrap().fingerprint("2")
+        );
         let activity = json!({"presences":[{"user":{"id":"3"},"activities":[{"type":4,"name":"custom status"},{"type":0,"name":"Minecraft"}]}]});
         assert_eq!(
             activity_title(&activity, "3").unwrap(),

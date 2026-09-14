@@ -1,4 +1,5 @@
 pub mod activity;
+pub mod avatars;
 pub mod config;
 pub mod discord;
 pub mod engine;

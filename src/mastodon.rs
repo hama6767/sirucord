@@ -63,7 +63,7 @@ impl Mastodon {
         self.upload_bytes(bytes, description).await
     }
 
-    async fn upload_bytes(&self, bytes: Vec<u8>, description: &str) -> Result<String> {
+    pub(crate) async fn upload_bytes(&self, bytes: Vec<u8>, description: &str) -> Result<String> {
         let (mime, name) =
             image_type(&bytes).context("Unsupported image: expected PNG, JPEG or WebP")?;
         let response = http::send(|| {
