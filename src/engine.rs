@@ -95,15 +95,23 @@ impl App {
                 );
             }
         }
-        let active = observed.values().filter(|(_, v)| v.is_some()).count();
+        let active = observed
+            .values()
+            .filter(|(_, v)| v.as_ref().is_some_and(|v| v.self_stream))
+            .count();
+        let occupied = observed
+            .values()
+            .filter(|(_, v)| v.as_ref().is_some_and(|v| !v.self_stream))
+            .count();
         println!(
-            "Checked {} target(s); {} live stream(s).",
+            "Checked {} target(s); {} live stream(s); {} occupied channel(s) without streams.",
             observed.len(),
-            active
+            active,
+            occupied
         );
         let contexts: Vec<_> = observed
             .values()
-            .filter_map(|(_, voice)| voice.as_ref()?.context.as_ref())
+            .filter_map(|(_, voice)| voice.as_ref().filter(|v| v.self_stream)?.context.as_ref())
             .collect();
         if !contexts.is_empty() {
             println!(
@@ -188,12 +196,7 @@ impl App {
                 }
                 let pending = Pending {
                     key: uuid::Uuid::new_v4().to_string(),
-                    text: context.render(
-                        &streamer.display_name,
-                        &streamer.guild_id,
-                        channel,
-                        start,
-                    ),
+                    text: context.render(&streamer.display_name, start),
                     attachment: context.artwork(),
                     media_id: None,
                     attempted_at: None,
@@ -238,18 +241,11 @@ impl App {
             if !start && attachment.is_none() {
                 continue;
             }
-            let channel = voice.channel_id.as_ref().expect("active voice has channel");
             let name = discord::clean(&streamer.display_name, 80);
             let text = if start {
-                format!(
-                    "🔴 {name} さんのDiscord配信開始を検知しました\n内容：{title}\nhttps://discord.com/channels/{}/{channel}",
-                    streamer.guild_id
-                )
+                format!("🔴 {name} さんのDiscord配信開始を検知しました\n内容：{title}")
             } else {
-                format!(
-                    "📷 {name} さんから配信スクリーンショット\n内容：{title}\nhttps://discord.com/channels/{}/{channel}",
-                    streamer.guild_id
-                )
+                format!("📷 {name} さんから配信スクリーンショット\n内容：{title}")
             };
             let pending = Pending {
                 metadata_fingerprint: None,
@@ -273,6 +269,21 @@ impl App {
         let Some(mut pending) = state.entries.get(key).and_then(|e| e.pending.clone()) else {
             return Ok(());
         };
+        // Old versions may have persisted an unsent announcement with a join
+        // link. Remove that generated footer too, preserving the idempotency key.
+        let text = pending
+            .text
+            .lines()
+            .filter(|line| !line.starts_with("https://discord.com/channels/"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if text != pending.text {
+            pending.text = text;
+            state.entries.get_mut(key).unwrap().pending = Some(pending.clone());
+            if !dry_run {
+                self.store.save(state).await?;
+            }
+        }
         if dry_run {
             // Do not put names, IDs, captions or screenshot URLs into public Actions logs.
             println!(

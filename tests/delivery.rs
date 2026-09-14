@@ -90,6 +90,12 @@ async fn start_restart_and_channel_move_do_not_duplicate() {
     let body: serde_json::Value = serde_json::from_slice(&posts[0].body).unwrap();
     assert_eq!(body["visibility"], "unlisted");
     assert!(body["status"].as_str().unwrap().contains("Test stream"));
+    assert!(
+        !body["status"]
+            .as_str()
+            .unwrap()
+            .contains("https://discord.com/channels/")
+    );
 }
 
 #[tokio::test]
@@ -429,7 +435,7 @@ async fn metadata_delivery_persists_fingerprint_and_does_not_read_chat() {
     assert!(state.entries["1:2"].metadata_fingerprint.is_none());
     state.entries.get_mut("1:2").unwrap().pending = Some(Pending {
         key: "metadata-key".into(),
-        text: "automatic game details".into(),
+        text: "automatic game details\nhttps://discord.com/channels/1/3".into(),
         attachment: None,
         media_id: None,
         attempted_at: None,
@@ -443,6 +449,10 @@ async fn metadata_delivery_persists_fingerprint_and_does_not_read_chat() {
         reloaded.entries["1:2"].metadata_fingerprint.as_deref(),
         Some("new-details")
     );
+    let requests = server.received_requests().await.unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert_eq!(body["status"], "automatic game details");
+    assert_eq!(requests[0].headers["idempotency-key"], "metadata-key");
     assert!(
         server
             .received_requests()

@@ -108,7 +108,7 @@ impl Discord {
             .await?)
     }
 
-    /// A short Gateway snapshot discovers everyone currently streaming. It does
+    /// A short Gateway snapshot discovers streams and occupied voice channels. It does
     /// not keep a runner alive. An incomplete/unavailable guild fails the whole
     /// snapshot, so an outage cannot accidentally mark streams as ended.
     pub async fn discover(&self, servers: &[Server]) -> Result<Vec<(Streamer, Voice)>> {
@@ -276,6 +276,72 @@ pub fn parse_guild(server: &Server, data: &Value) -> Result<Vec<(Streamer, Voice
                 screenshots: server.screenshots,
             },
             voice,
+        ));
+    }
+    // A single channel-level notification covers human presence when nobody is
+    // streaming. Synthetic target IDs cannot collide with Discord user snowflakes.
+    for channel in &server.voice_channel_ids {
+        if result
+            .iter()
+            .any(|(_, v)| v.channel_id.as_ref() == Some(channel))
+        {
+            continue;
+        }
+        let mut names = Vec::new();
+        for raw in data["voice_states"]
+            .as_array()
+            .context("Missing guild voice states")?
+        {
+            if raw["channel_id"].as_str() != Some(channel) {
+                continue;
+            }
+            let id = raw["user_id"].as_str().context("Missing voice user ID")?;
+            let member = members
+                .get(id)
+                .context("Voice member absent from snapshot; retry later")?;
+            if member["user"]["bot"] == true {
+                continue;
+            }
+            names.push(clean(
+                member["nick"]
+                    .as_str()
+                    .or(member["user"]["global_name"].as_str())
+                    .or(member["user"]["username"].as_str())
+                    .unwrap_or("Discord参加者"),
+                60,
+            ));
+        }
+        if names.is_empty() {
+            continue;
+        }
+        names.sort();
+        let context = crate::activity::StreamContext {
+            channel_name: channels
+                .iter()
+                .find(|c| c["id"].as_str() == Some(channel))
+                .and_then(|c| c["name"].as_str())
+                .map(|s| clean(s, 40))
+                .unwrap_or_else(|| "ボイスチャンネル".into()),
+            participants: names.len(),
+            voice_members: names,
+            activities: Vec::new(),
+        };
+        result.push((
+            Streamer {
+                guild_id: server.guild_id.clone(),
+                user_id: format!("voice-{channel}"),
+                display_name: "通話参加者".into(),
+                voice_channel_ids: vec![channel.clone()],
+                default_title: server.default_title.clone(),
+                announcement_channel_id: None,
+                screenshots: false,
+            },
+            Voice {
+                channel_id: Some(channel.clone()),
+                session_id: format!("voice-{channel}"),
+                self_stream: false,
+                context: Some(context),
+            },
         ));
     }
     Ok(result)
@@ -482,6 +548,60 @@ mod tests {
         assert!(err.to_string().contains("not a member"));
         peer.await.unwrap();
     }
+    #[test]
+    fn occupied_channels_notify_without_streams_and_ignore_bots() {
+        let server = Server {
+            guild_id: "1".into(),
+            use_activity: true,
+            voice_channel_ids: vec!["2".into()],
+            default_title: "test".into(),
+            announcement_channel_id: None,
+            screenshots: false,
+        };
+        let mut data = json!({"channels":[{"id":"2","name":"雑談"}],
+            "members":[{"user":{"id":"3","username":"Alice"}},{"user":{"id":"4","username":"Bob"}},{"user":{"id":"5","bot":true}}],
+            "voice_states":[{"user_id":"3","channel_id":"2","session_id":"a"},{"user_id":"4","channel_id":"2","session_id":"b"},{"user_id":"5","channel_id":"2","session_id":"c","self_stream":true}]});
+        let found = parse_guild(&server, &data).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0.key(), "1:voice-2");
+        assert!(!found[0].1.self_stream);
+        let context = found[0].1.context.as_ref().unwrap();
+        let rendered = context.render("", true);
+        for expected in ["通話参加 2人", "Alice", "Bob", "現在、配信はありません"] {
+            assert!(rendered.contains(expected));
+        }
+        assert!(!rendered.contains("https://"));
+        let fingerprint = context.fingerprint("2");
+        data["voice_states"].as_array_mut().unwrap().reverse();
+        let same = parse_guild(&server, &data).unwrap();
+        assert_eq!(
+            fingerprint,
+            same[0].1.context.as_ref().unwrap().fingerprint("2")
+        );
+        data["members"][1]["user"]["username"] = json!("Carol");
+        assert_ne!(
+            fingerprint,
+            parse_guild(&server, &data).unwrap()[0]
+                .1
+                .context
+                .as_ref()
+                .unwrap()
+                .fingerprint("2")
+        );
+        data["voice_states"][2]["self_stream"] = json!(true);
+        let streaming = parse_guild(&server, &data).unwrap();
+        assert_eq!(streaming.len(), 1); // No extra channel notification alongside the stream.
+        assert_eq!(streaming[0].0.user_id, "3");
+        assert!(streaming[0].1.self_stream);
+        data["voice_states"] = json!([{"user_id":"5","channel_id":"2","session_id":"bot"}]);
+        assert!(parse_guild(&server, &data).unwrap().is_empty());
+        data["voice_states"] = json!([]);
+        assert!(parse_guild(&server, &data).unwrap().is_empty());
+        data["voice_states"] =
+            json!([{"user_id":"missing","channel_id":"2","session_id":"missing"}]);
+        assert!(parse_guild(&server, &data).is_err());
+    }
+
     #[test]
     fn discovers_only_human_streams_in_allowed_channels() {
         let server = Server {

@@ -6,6 +6,9 @@ use sha2::{Digest, Sha256};
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct StreamContext {
+    /// Nonempty only for an occupied channel without a human stream.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub voice_members: Vec<String>,
     pub channel_name: String,
     pub participants: usize,
     pub activities: Vec<Activity>,
@@ -59,6 +62,7 @@ impl StreamContext {
         activities.sort_by(|a, b| (a.kind, &a.name).cmp(&(b.kind, &b.name)));
         activities.truncate(2);
         Self {
+            voice_members: Vec::new(),
             channel_name,
             participants,
             activities,
@@ -76,9 +80,15 @@ impl StreamContext {
         self.activities.iter().find_map(|a| a.artwork.clone())
     }
 
-    pub fn render(&self, name: &str, guild: &str, channel: &str, start: bool) -> String {
+    pub fn render(&self, name: &str, start: bool) -> String {
         let name = clean(name, 60);
-        let heading = if start {
+        let heading = if !self.voice_members.is_empty() {
+            if start {
+                "💬 Discordの通話参加を検知しました".into()
+            } else {
+                "💬 Discordの通話参加状況を更新しました".into()
+            }
+        } else if start {
             format!("🔴 {name} さんのDiscord配信を検知しました")
         } else {
             format!("🎮 {name} さんのDiscord配信情報を更新しました")
@@ -87,7 +97,10 @@ impl StreamContext {
             "場所：{}／通話参加 {}人",
             self.channel_name, self.participants
         )];
-        if self.activities.is_empty() {
+        if !self.voice_members.is_empty() {
+            lines.push("現在、配信はありません".into());
+            lines.push(format!("参加者：{}", self.voice_members.join("、")));
+        } else if self.activities.is_empty() {
             lines.push("共有アプリの情報はDiscordから取得できませんでした".into());
         } else {
             lines.push("Discordのアクティビティ（共有画面とは一致しない場合があります）".into());
@@ -113,8 +126,7 @@ impl StreamContext {
                 }
             }
         }
-        let footer = format!("\nhttps://discord.com/channels/{guild}/{channel}");
-        let budget = 480_usize.saturating_sub(heading.chars().count() + 1 + footer.chars().count());
+        let budget = 480_usize.saturating_sub(heading.chars().count() + 1);
         let content = lines.join("\n");
         let text = if content.chars().count() > budget {
             format!(
@@ -127,7 +139,7 @@ impl StreamContext {
         } else {
             content
         };
-        format!("{heading}\n{text}{footer}")
+        format!("{heading}\n{text}")
     }
 }
 
@@ -194,7 +206,8 @@ mod tests {
         let context = StreamContext::from_guild(&guild(), "20", "10");
         assert_eq!(context.participants, 1);
         assert_eq!(context.activities.len(), 1);
-        let text = context.render("User", "1", "10", true);
+        let text = context.render("User", true);
+        assert!(!text.contains("https://discord.com/channels/"));
         for field in ["Ranked match", "Map A", "Round 2", "2/4", "通話参加 1人"] {
             assert!(text.contains(field));
         }
@@ -233,21 +246,10 @@ mod tests {
         data["presences"][0]["activities"][0]["details"] = json!("あ".repeat(1000));
         let context = StreamContext::from_guild(&data, "20", "10");
         assert!(context.artwork().is_none());
-        assert!(
-            context
-                .render(
-                    &"名".repeat(1000),
-                    "123456789012345678",
-                    "123456789012345678",
-                    false
-                )
-                .chars()
-                .count()
-                <= 480
-        );
+        assert!(context.render(&"名".repeat(1000), false).chars().count() <= 480);
         assert!(
             StreamContext::from_guild(&data, "missing", "10")
-                .render("User", "1", "10", true)
+                .render("User", true)
                 .contains("取得できません")
         );
     }
