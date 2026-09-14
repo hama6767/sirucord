@@ -1,0 +1,21 @@
+name: Temporary schedule diagnostic
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    steps:
+      - name: Record scheduler delivery without contacting Discord or Mastodon
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          CRON_EXPRESSION: ${{ github.event.schedule }}
+        run: |
+          date -u
+          printf 'event=%s cron=%s\n' "$EVENT_NAME" "$CRON_EXPRESSION"
