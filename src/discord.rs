@@ -617,6 +617,44 @@ mod tests {
     }
 
     #[test]
+    fn simultaneous_streamers_are_all_independent_targets_with_channel_icons() {
+        let server = Server {
+            guild_id: "1".into(),
+            use_activity: true,
+            voice_channel_ids: vec!["10".into(), "11".into()],
+            default_title: "test".into(),
+            announcement_channel_id: None,
+            screenshots: false,
+        };
+        let data = json!({"id":"1",
+            "channels":[{"id":"10","name":"A"},{"id":"11","name":"B"}],
+            "members":[{"user":{"id":"20","username":"Alice"}},
+                {"user":{"id":"21","username":"Bob"}},
+                {"user":{"id":"22","username":"Carol"}},
+                {"user":{"id":"23","username":"Dave"}}],
+            "voice_states":[
+                {"user_id":"20","channel_id":"10","session_id":"a","self_stream":true},
+                {"user_id":"21","channel_id":"10","session_id":"b","self_stream":true},
+                {"user_id":"22","channel_id":"11","session_id":"c","self_stream":true},
+                {"user_id":"23","channel_id":"11","session_id":"d","self_stream":true}]});
+        let found = parse_guild(&server, &data).unwrap();
+        assert_eq!(found.len(), 4);
+        let keys: HashSet<_> = found.iter().map(|(s, _)| s.key()).collect();
+        assert_eq!(keys.len(), 4);
+        for (streamer, voice) in found {
+            assert!(voice.self_stream);
+            let context = voice.context.unwrap();
+            assert_eq!(context.participants, 2);
+            assert_eq!(context.avatars.len(), 2);
+            assert!(context.voice_members.is_empty());
+            let text = context.render(&streamer.display_name, true);
+            assert!(text.contains(&streamer.display_name));
+            assert!(text.contains("Discord配信を検知しました"));
+            assert!(!text.contains("https://discord.com/channels/"));
+        }
+    }
+
+    #[test]
     fn discovers_only_human_streams_in_allowed_channels() {
         let server = Server {
             guild_id: "1".into(),

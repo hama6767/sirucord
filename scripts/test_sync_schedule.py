@@ -12,9 +12,9 @@ class ScheduleTests(unittest.TestCase):
             return set(map(int, cron.split()[0].split(",")))
         base = minutes("monitor.yml")
         extra = minutes("monitor-active.yml")
-        self.assertEqual(base, {17, 47})
+        self.assertEqual(base, {14, 44})
         self.assertFalse(base & extra)
-        self.assertEqual(base | extra, set(range(2, 60, 5)))
+        self.assertEqual(base | extra, set(range(4, 60, 5)))
 
     def run_sync(self, occupied, state):
         calls = []
