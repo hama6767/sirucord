@@ -43,7 +43,7 @@ def report(request, enabled, now):
         latest = runs[0] if runs else None
         # Disabled extra checks are normal while everyone is absent. The base
         # workflow must remain active whenever monitoring is enabled.
-        expected = enabled == "true" and (name == "monitor.yml" or workflow["state"] == "active")
+        expected = enabled == "true" and (name == "monitor.yml" or workflow["state"] != "disabled_manually")
         level, detail = diagnose(workflow["state"], latest, expected=expected, now=now)
         unhealthy |= level == "ERROR"
         lines.extend([f"## {name}", "", f"Workflow ID: `{workflow['id']}`; state: `{workflow['state']}`.",
