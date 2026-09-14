@@ -51,6 +51,22 @@ class DiagnosisTests(unittest.TestCase):
         self.assertEqual(len(calls), 7)
         self.assertFalse(report(request, "false", NOW)[1])
 
+    def test_external_mode_checks_dispatch_and_excludes_connection_tests(self):
+        calls = []
+
+        def request(path):
+            calls.append(path)
+            if not path:
+                return {"default_branch": "main", "private": False, "fork": False, "archived": False}
+            if "runs?" in path:
+                return {"workflow_runs": [{"display_title": "External timer connection test", "conclusion": "success"}]}
+            return {"state": "active"}
+
+        text, unhealthy = report(request, "true", NOW, "cronjob")
+        self.assertTrue(unhealthy)
+        self.assertIn("Connection-test runs are excluded", text)
+        self.assertFalse(any("event=schedule" in call for call in calls))
+
 
 if __name__ == "__main__":
     unittest.main()

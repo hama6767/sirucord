@@ -5,12 +5,15 @@ on:
       dry_run:
         type: boolean
         default: false
+      external_interval:
+        type: string
+        default: ''
 
 permissions:
   contents: write
   actions: write
 
-# Both schedules and manual runs share one durable state writer.
+# Native timers, external timers and manual runs share one durable state writer.
 concurrency:
   group: sirucord-monitor
   cancel-in-progress: false
@@ -53,7 +56,16 @@ jobs:
             bin/sirucord --github-state run --report occupancy.json
           fi
       - name: Select occupied or empty polling interval
-        if: ${{ !inputs.dry_run }}
+        if: ${{ !inputs.dry_run && vars.SIRUCORD_SCHEDULER != 'cronjob' }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: python3 scripts/sync_schedule.py occupancy.json
+      - name: Adapt external timer to occupancy
+        if: ${{ !inputs.dry_run && vars.SIRUCORD_SCHEDULER == 'cronjob' }}
+        env:
+          CRONJOB_API_KEY: ${{ secrets.CRONJOB_API_KEY }}
+          SIRUCORD_DISPATCH_TOKEN: ${{ secrets.SIRUCORD_DISPATCH_TOKEN }}
+          SIRUCORD_CRONJOB_ID: ${{ vars.SIRUCORD_CRONJOB_ID }}
+          EXTERNAL_INTERVAL: ${{ inputs.external_interval }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: python3 scripts/external_schedule.py sync occupancy.json

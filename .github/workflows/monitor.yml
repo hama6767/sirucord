@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   monitor:
-    if: vars.SIRUCORD_ENABLED == 'true' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || (vars.SIRUCORD_ENABLED == 'true' && vars.SIRUCORD_SCHEDULER != 'cronjob')
     uses: ./.github/workflows/monitor-run.yml
     with:
       dry_run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}

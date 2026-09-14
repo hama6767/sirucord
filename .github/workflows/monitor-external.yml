@@ -1,0 +1,25 @@
+name: External Discord checks
+run-name: ${{ inputs.dry_run && 'External timer connection test' || 'External timer Discord check' }}
+on:
+  workflow_dispatch:
+    inputs:
+      interval_minutes:
+        description: Interval currently configured in the external timer
+        type: choice
+        options: ['5', '30']
+        default: '30'
+      dry_run:
+        description: Test connections without posting or changing state
+        type: boolean
+        default: false
+permissions:
+  contents: write
+  actions: write
+jobs:
+  monitor:
+    if: inputs.dry_run || (vars.SIRUCORD_ENABLED == 'true' && vars.SIRUCORD_SCHEDULER == 'cronjob')
+    uses: ./.github/workflows/monitor-run.yml
+    with:
+      dry_run: ${{ inputs.dry_run }}
+      external_interval: ${{ inputs.interval_minutes }}
+    secrets: inherit

@@ -20,4 +20,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           SIRUCORD_ENABLED: ${{ vars.SIRUCORD_ENABLED }}
+          SIRUCORD_SCHEDULER: ${{ vars.SIRUCORD_SCHEDULER }}
         run: python3 scripts/check_schedule.py
+      - name: Inspect external timer delivery
+        if: ${{ !cancelled() && vars.SIRUCORD_SCHEDULER == 'cronjob' }}
+        env:
+          CRONJOB_API_KEY: ${{ secrets.CRONJOB_API_KEY }}
+          SIRUCORD_CRONJOB_ID: ${{ vars.SIRUCORD_CRONJOB_ID }}
+        run: python3 scripts/external_schedule.py inspect

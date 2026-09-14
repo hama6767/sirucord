@@ -174,9 +174,28 @@ screenshots = true
 
 スケジュールは固定の時刻で、最後の手動実行から30分後に動くタイマーではありません。Actions画面では両方のワークフローの履歴を確認してください。定期実行はGitHubの混雑で遅延・欠落することがあり、`active` 表示や手動実行の成功だけでは自動起動を確認したことになりません。起動していなければ `Run workflow` で `dry_run` をオフにすると、その時点で確認・投稿できます。
 
-自動起動の診断は **Actions → Diagnose automatic execution → Run workflow** で実行できます。Summaryに設定状態、`schedule` による実際の起動件数、直近の定期・手動実行を表示します。有効な監視ワークフローに定期実行履歴がない、直近の定期起動から60分超、または定期実行が失敗している場合は診断を失敗として報告します。診断の失敗は投稿処理を停止しません。無人時の追加チェック無効化は正常として扱います。GitHubのメタデータを7回読み取るだけで、Discord/Mastodonへの接続・投稿や設定変更は行いません。
+自動起動の診断は **Actions → Diagnose automatic execution → Run workflow** で実行できます。Summaryに設定状態と直近の実行を表示します。有効な監視ワークフローに実行履歴がない、直近の起動から60分超、または実行が失敗している場合は診断を失敗として報告します。診断の失敗は投稿処理を停止しません。GitHub方式では定期実行を調べ、無人時の追加チェック無効化は正常として扱います。外部方式では専用ワークフローの実行を調べ、接続テストを除外し、cron-job.orgの送信履歴も表示します。Discord/Mastodonへの接続・投稿や設定変更は行いません。
 
 履歴自体がない場合は、アプリのログやトークンを変更する前に、既定ブランチ・ワークフローの有効状態・GitHub側のスケジュール配信を調べます。履歴が作成されて失敗している場合は、その実行ログを調べます。定期起動をGitHub自身だけで確実に保証する仕組みはありません。
+
+### 外部スケジューラから起動する
+
+GitHubのcronが起動しない場合は、無料の [cron-job.org](https://cron-job.org/) から `workflow_dispatch` を呼び出せます。常駐PCやCloudflareは不要です。処理本体とDiscord/Mastodonの認証情報はGitHub Actionsに置きます。
+
+1. cron-job.orgのアカウントを作成し、Settingsで発行したAPIキーをActions Secret `CRONJOB_API_KEY` に登録します。
+2. GitHubでこのリポジトリのみを対象に、**Actions: Read and write** のfine-grained tokenを作成し、Actions Secret `SIRUCORD_DISPATCH_TOKEN` に登録します。起動用トークンはcron-job.orgのリクエストヘッダーにも保存されます。期限を設定したトークンは期限前に更新が必要です。
+3. **Set up external scheduler** を実行します。既存ジョブがあれば更新し、なければ1個だけ作成します。専用ワークフローの投稿なし接続テストも起動します。
+4. 接続テストの成功後、セットアップのSummaryに表示されたIDをActions Variable `SIRUCORD_CRONJOB_ID` に設定します。さらに `SIRUCORD_SCHEDULER=cronjob`、`SIRUCORD_ENABLED=true` を設定します。
+5. **Active Discord checks** を無効化します。外部モードでは両方のGitHub cronに起動されても投稿ジョブを実行しません。**Announce Discord streams** の手動起動は引き続き使えます。
+6. cron-job.orgの送信履歴と **External Discord checks** の実行成功を確認します。HTTP成功は起動要求の受付までを表し、投稿処理の成功とは別です。
+
+作成直後は5分間隔で、監視成功後に有人なら5分、無人なら30分へ自動変更します。無人時はActions自体の起動回数も減ります。タイマーのリクエスト本文に現在の間隔を含め、状態が変わった時だけ管理APIを1回呼び出して間隔と本文を同時更新します。手動確認時は現在のジョブ設定を1回読み取ります。cron-job.orgの管理APIには既定100回/日の上限があるため、過剰な手動設定変更は避けてください。上限や通信エラー時は従来のタイマー設定で次回再試行します。Discord監視が失敗した場合は間隔を変更しません。
+
+外部・手動・GitHub起動は同じconcurrencyと暗号化通知履歴を共有します。処理待ちが発生した場合などは目標の5分／30分から遅れることがあります。GitHubの定期トリガー障害を迂回する構成で、GitHub Actions全体の停止には対応できません。
+
+停止は `SIRUCORD_ENABLED=false` で投稿を止め、**Set up external scheduler** の `activate` をオフにしてタイマーも無効化します。トークン更新時はSecretを更新して同ワークフローを再実行します。GitHub方式へ戻す場合は外部タイマーを無効化し、`SIRUCORD_SCHEDULER=github` にして **Announce Discord streams** を手動実行します。
+
+参照: [cron-job.org管理API](https://docs.cron-job.org/rest-api.html)、[GitHub起動API](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event)。
 
 追加監視の有効・無効はGitHub Actionsに保存され、同じ状態の間は設定を書き換えません。正常に確認と投稿処理が完了した場合だけ切り替え、失敗時は前の間隔を維持します。手動の `dry_run` は間隔を変更しません。GitHub側の切り替えに失敗しても基本監視は残り、次の正常な実行で再試行します。
 

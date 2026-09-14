@@ -1,0 +1,29 @@
+name: Set up external scheduler
+on:
+  workflow_dispatch:
+    inputs:
+      activate:
+        description: Enable the cron-job.org timer (repository mode must also be cronjob)
+        type: boolean
+        default: true
+permissions:
+  contents: read
+concurrency:
+  group: sirucord-monitor
+  cancel-in-progress: false
+jobs:
+  setup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Configure timer and test dispatch permissions
+        env:
+          CRONJOB_API_KEY: ${{ secrets.CRONJOB_API_KEY }}
+          SIRUCORD_DISPATCH_TOKEN: ${{ secrets.SIRUCORD_DISPATCH_TOKEN }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          ACTIVATE: ${{ inputs.activate }}
+        run: python3 scripts/external_schedule.py setup

@@ -29,13 +29,26 @@ def diagnose(state, latest, *, expected, now):
     return "OK", f"Scheduled execution succeeded; latest run was created {age} minutes ago. Timing is not guaranteed."
 
 
-def report(request, enabled, now):
+def report(request, enabled, now, scheduler="github"):
     repo = request("")
     lines = ["# Sirucord schedule diagnosis", "", f"Checked at: {now.isoformat()}",
              f"Default branch: `{repo['default_branch']}`; public: `{not repo['private']}`; "
              f"fork: `{repo['fork']}`; archived: `{repo['archived']}`.",
              f"SIRUCORD_ENABLED: `{enabled}`.", ""]
     unhealthy = False
+    if scheduler == "cronjob":
+        workflow = request("/actions/workflows/monitor-external.yml")
+        runs = request("/actions/workflows/monitor-external.yml/runs?event=workflow_dispatch&per_page=20")["workflow_runs"]
+        runs = [run for run in runs if run.get("display_title") == "External timer Discord check"]
+        latest = runs[0] if runs else None
+        level, detail = diagnose(workflow["state"], latest, expected=enabled == "true", now=now)
+        detail = detail.replace("schedule-triggered", "external-dispatch").replace("Scheduled", "External dispatch").replace("scheduled", "external-dispatch").replace("Schedule", "External dispatch")
+        lines.extend(["## External scheduler", "", f"**{level}**: {detail}",
+                      "GitHub-native cron is not used in cronjob mode. Connection-test runs are excluded.",
+                      "A dispatch run alone does not prove the external timer sent it. Compare the provider execution history."])
+        if latest:
+            lines.append(f"[Latest external workflow run]({latest['html_url']})")
+        return "\n".join(lines) + "\n", level == "ERROR"
     for name in WORKFLOWS:
         workflow = request(f"/actions/workflows/{name}")
         scheduled = request(f"/actions/workflows/{name}/runs?event=schedule&per_page=1")
@@ -86,7 +99,8 @@ def main():
         except urllib.error.HTTPError as error:
             raise RuntimeError(f"GitHub metadata read failed: HTTP {error.code}") from None
 
-    text, unhealthy = report(request, os.environ.get("SIRUCORD_ENABLED", "unknown"), datetime.now(timezone.utc))
+    text, unhealthy = report(request, os.environ.get("SIRUCORD_ENABLED", "unknown"), datetime.now(timezone.utc),
+                             os.environ.get("SIRUCORD_SCHEDULER", "github"))
     print(text)
     if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
         with Path(summary).open("a", encoding="utf-8") as output:
