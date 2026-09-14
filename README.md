@@ -98,6 +98,8 @@ GitHubの **Settings → Secrets and variables → Actions → Secrets** に以�
 
 ### 4. 接続確認して有効化する
 
+Botの招待先や権限が分からない場合は、**Actions → Check Discord installation** を手動実行します。ログに正しいBotの招待リンクと、参加状態・チャンネルへのアクセス・必要なIntentの確認結果が表示されます。`configure_intents` をオンにすると、必要な未承認Bot向けIntentも設定します。Discordのトークン、サーバーID、メッセージ本文はログに出しません。
+
 1. [Releases](https://github.com/hama6767/sirucord/releases) に使うバージョンの配布ファイルがあることを確認します。
 2. **Actions → Announce Discord streams → Run workflow** を開き、`dry_run` をオンにして実行します。Discord/Mastodonへの読み取りだけを行い、投稿も履歴保存も行いません。定期監視を有効にする前でも手動実行できます。
 3. 接続確認後、**Settings → Secrets and variables → Actions → Variables** に `SIRUCORD_ENABLED` = `true` を登録し、定期監視を有効にします。

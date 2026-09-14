@@ -1,0 +1,32 @@
+name: Check Discord installation
+on:
+  workflow_dispatch:
+    inputs:
+      configure_intents:
+        description: Enable the limited Gateway intents required by this configuration
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: sirucord-setup
+  cancel-in-progress: false
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check installation and show invite link
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          SIRUCORD_CONFIG: ${{ secrets.SIRUCORD_CONFIG }}
+          CONFIGURE: ${{ inputs.configure_intents }}
+        run: |
+          if [ "$CONFIGURE" = true ]; then
+            python3 scripts/check_setup.py --configure-intents
+          else
+            python3 scripts/check_setup.py
+          fi
