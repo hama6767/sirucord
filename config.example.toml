@@ -1,0 +1,18 @@
+# Copy to config.toml locally, or put the full TOML in the SIRUCORD_CONFIG secret.
+# Only register people/channels whose members agree to external announcements.
+screenshot_interval_minutes = 30
+
+[mastodon]
+base_url = "https://mastodon.social"
+visibility = "unlisted" # public / unlisted / private (followers only)
+
+[[servers]]
+guild_id = "123456789012345678"
+use_activity = false # Set true + enable Presence Intent to use the playing game as fallback.
+voice_channel_ids = ["345678901234567890"]
+default_title = "ゲーム・作業の画面共有（詳しくはDiscordで）"
+announcement_channel_id = "456789012345678901"
+screenshots = true
+
+# To monitor only specific people instead, replace [[servers]] with [[streamers]]
+# and add user_id = "234567890123456789" and display_name = "配信者の名前".

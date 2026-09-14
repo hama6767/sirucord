@@ -1,0 +1,90 @@
+name: Test and release
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        shell: bash
+        run: rustup toolchain install 1.98.1 --profile minimal --component rustfmt,clippy
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+      - name: Validate, test and build
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +1.98.1 fmt --check
+          cargo +1.98.1 clippy --all-targets --locked -- -D warnings
+          cargo +1.98.1 test --locked
+          cargo +1.98.1 run --locked -- --config config.example.toml check
+          cargo +1.98.1 build --release --locked
+      - name: Package Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir dist
+          cp target/release/sirucord dist/
+          cp README.md config.example.toml LICENSE dist/
+          tar -czf sirucord-linux-x86_64.tar.gz -C dist .
+      - name: Package Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory dist | Out-Null
+          Copy-Item target/release/sirucord.exe, README.md, config.example.toml, LICENSE dist/
+          Compress-Archive -Path dist/* -DestinationPath sirucord-windows-x86_64.zip
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sirucord-${{ runner.os }}
+          path: |
+            sirucord-linux-x86_64.tar.gz
+            sirucord-windows-x86_64.zip
+          retention-days: 1
+          if-no-files-found: error
+  release:
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: sirucord-*
+          merge-multiple: true
+          path: release-assets
+      - name: Publish version once
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
+          if gh release view "v$version" > /dev/null 2>&1; then
+            echo "Version already published; bump Cargo.toml to release changes."
+            exit 0
+          fi
+          (cd release-assets && sha256sum *.tar.gz *.zip > SHA256SUMS)
+          gh release create "v$version" release-assets/* --target "$GITHUB_SHA" --title "Sirucord v$version" --notes-file CHANGELOG.md
