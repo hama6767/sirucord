@@ -25,6 +25,7 @@ pub struct Server {
     pub voice_channel_ids: Vec<String>,
     pub default_title: String,
     pub announcement_channel_id: Option<String>,
+    pub share_channel_id: Option<String>,
     #[serde(default)]
     pub screenshots: bool,
 }
@@ -114,6 +115,10 @@ impl Config {
         for s in &self.servers {
             ensure!(guilds.insert(&s.guild_id), "Duplicate server");
             ensure!(snowflake(&s.guild_id), "Invalid guild ID");
+            ensure!(
+                s.share_channel_id.as_ref().is_none_or(|id| snowflake(id)),
+                "Invalid share channel ID"
+            );
             ensure!(
                 !s.voice_channel_ids.is_empty()
                     && s.voice_channel_ids.iter().all(|id| snowflake(id)),

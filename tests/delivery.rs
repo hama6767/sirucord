@@ -226,6 +226,7 @@ async fn uncertain_old_delivery_stops_instead_of_reposting() {
             last_post: None,
             last_attachment: None,
             pending: Some(Pending {
+                shared_message: false,
                 avatars: Vec::new(),
                 metadata_fingerprint: None,
                 key: "key".into(),
@@ -494,6 +495,7 @@ async fn metadata_delivery_persists_fingerprint_and_does_not_read_chat() {
     // Old encrypted state has neither of the new fields.
     assert!(state.entries["1:2"].metadata_fingerprint.is_none());
     state.entries.get_mut("1:2").unwrap().pending = Some(Pending {
+        shared_message: false,
         avatars: Vec::new(),
         key: "metadata-key".into(),
         text: "automatic game details\nhttps://discord.com/channels/1/3".into(),
@@ -522,4 +524,152 @@ async fn metadata_delivery_persists_fingerprint_and_does_not_read_chat() {
             .iter()
             .all(|request| request.method == "POST")
     );
+}
+
+#[tokio::test]
+async fn channel_sharing_requires_occupants_and_only_publishes_the_latest_change() {
+    let server = MockServer::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app(&server, &dir).await;
+    app.config.streamers.clear();
+    app.config.servers = vec![sirucord::config::Server {
+        guild_id: "1".into(),
+        use_activity: true,
+        voice_channel_ids: vec!["3".into()],
+        default_title: "test".into(),
+        announcement_channel_id: None,
+        share_channel_id: Some("9".into()),
+        screenshots: false,
+    }];
+    let mut state = State::default();
+    let occupied = std::collections::HashSet::from(["1".to_owned()]);
+    app.share_updates(&mut state, &Default::default(), false)
+        .await
+        .unwrap();
+    assert!(server.received_requests().await.unwrap().is_empty());
+    Mock::given(method("POST"))
+        .and(path("/api/v1/statuses"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id":"shared"})))
+        .expect(2)
+        .mount(&server)
+        .await;
+    for (id, expected_posts) in [(100, 0), (100, 0), (200, 1), (200, 1), (300, 2), (300, 2)] {
+        Mock::given(method("GET"))
+            .and(path("/channels/9/messages"))
+            .and(wiremock::matchers::query_param("limit", "1"))
+            .and(header("Authorization", "Bot discord-secret"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
+                "id":id.to_string(),"edited_timestamp":null,"type":0,"author":{"username":"Alice"},
+                "content":format!("話題{id} https://example.invalid/video"),
+                "embeds":[{"url":"https://example.invalid/video","title":"動画のタイトル"}]
+            }])))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        app.share_updates(&mut state, &occupied, false)
+            .await
+            .unwrap();
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(
+            requests.iter().filter(|r| r.method == "POST").count(),
+            expected_posts
+        );
+    }
+    let requests = server.received_requests().await.unwrap();
+    let posts: Vec<_> = requests.iter().filter(|r| r.method == "POST").collect();
+    let first: serde_json::Value = serde_json::from_slice(&posts[0].body).unwrap();
+    assert!(first["status"].as_str().unwrap().contains("話題200"));
+    assert!(first["status"].as_str().unwrap().contains("動画のタイトル"));
+    assert_eq!(
+        app.store.load().await.unwrap().entries["1:share-9"].session_id,
+        "300"
+    );
+    // A read failure preserves the cursor and cannot be mistaken for an empty channel.
+    Mock::given(method("GET"))
+        .and(path("/channels/9/messages"))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+    assert!(
+        app.share_updates(&mut state, &occupied, false)
+            .await
+            .is_err()
+    );
+    assert_eq!(state.entries["1:share-9"].session_id, "300");
+}
+
+#[tokio::test]
+async fn voice_checks_preserve_shared_channel_cursors() {
+    let server = MockServer::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app(&server, &dir).await;
+    let state: State = serde_json::from_value(json!({"version":1,"entries":{"1:share-9":{
+        "session_id":"100","first_seen":Utc::now(),"announced":true,"metadata_fingerprint":"baseline",
+        "last_post":null,"last_attachment":null,"pending":null
+    }}})).unwrap();
+    app.store.save(&state).await.unwrap();
+    Mock::given(method("GET"))
+        .and(path("/guilds/1/voice-states/2"))
+        .respond_with(ResponseTemplate::new(404).set_body_json(json!({"code":10065})))
+        .mount(&server)
+        .await;
+    assert!(!app.run(false).await.unwrap());
+    assert_eq!(
+        app.store.load().await.unwrap().entries["1:share-9"].session_id,
+        "100"
+    );
+}
+
+#[tokio::test]
+async fn failed_shared_message_waits_for_occupancy_and_reuses_its_key() {
+    let server = MockServer::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app(&server, &dir).await;
+    app.config.servers = vec![sirucord::config::Server {
+        guild_id: "1".into(),
+        use_activity: true,
+        voice_channel_ids: vec!["3".into()],
+        default_title: "test".into(),
+        announcement_channel_id: None,
+        share_channel_id: Some("9".into()),
+        screenshots: false,
+    }];
+    let mut state: State = serde_json::from_value(json!({"version":1,"entries":{"1:share-9":{
+        "session_id":"200","first_seen":Utc::now(),"announced":true,"last_post":null,"last_attachment":null,
+        "pending":{"shared_message":true,"key":"shared-message-key","text":"通話中の話題",
+            "attachment":null,"media_id":null,"attempted_at":null,"is_start":false,"metadata_fingerprint":"new-message"}
+    }}})).unwrap();
+    let occupied = std::collections::HashSet::from(["1".to_owned()]);
+    Mock::given(method("POST"))
+        .and(path("/api/v1/statuses"))
+        .respond_with(ResponseTemplate::new(400))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    assert!(
+        app.share_updates(&mut state, &occupied, false)
+            .await
+            .is_err()
+    );
+    let mut restored = app.store.load().await.unwrap();
+    app.share_updates(&mut restored, &Default::default(), false)
+        .await
+        .unwrap();
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    Mock::given(method("POST"))
+        .and(path("/api/v1/statuses"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id":"shared"})))
+        .mount(&server)
+        .await;
+    app.share_updates(&mut restored, &occupied, false)
+        .await
+        .unwrap();
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2); // No new message read/post in the recovery run.
+    assert!(
+        requests
+            .iter()
+            .all(|r| r.headers["idempotency-key"] == "shared-message-key")
+    );
+    assert!(restored.entries["1:share-9"].pending.is_none());
 }

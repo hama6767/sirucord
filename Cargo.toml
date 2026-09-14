@@ -1,6 +1,6 @@
 [package]
 name = "sirucord"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Discord Go Live announcements for Mastodon, powered by scheduled GitHub Actions"
@@ -8,6 +8,7 @@ license = "MIT"
 repository = "https://github.com/hama6767/sirucord"
 
 [dependencies]
+ab_glyph = "0.2"
 aes-gcm = "0.10"
 anyhow = "1"
 base64 = "0.22"
@@ -17,10 +18,12 @@ hkdf = "0.12"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 futures-util = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
+scraper = "0.24"
+linkify = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "net"] }
 tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
 toml = "0.8"
 uuid = { version = "1", features = ["v4"] }

@@ -467,6 +467,7 @@ mod tests {
             voice_channel_ids: vec!["2".into()],
             default_title: "title".into(),
             announcement_channel_id: None,
+            share_channel_id: None,
             screenshots: false,
         }];
         let result = tokio::time::timeout(
@@ -519,6 +520,7 @@ mod tests {
             voice_channel_ids: vec!["2".into()],
             default_title: "title".into(),
             announcement_channel_id: None,
+            share_channel_id: None,
             screenshots: false,
         }];
         let err = tokio::time::timeout(
@@ -540,6 +542,7 @@ mod tests {
             voice_channel_ids: vec!["2".into(), "6".into()],
             default_title: "test".into(),
             announcement_channel_id: None,
+            share_channel_id: None,
             screenshots: false,
         };
         let mut data = json!({"id":"1","channels":[{"id":"2","name":"A"},{"id":"6","name":"B"}],
@@ -570,6 +573,7 @@ mod tests {
             voice_channel_ids: vec!["2".into()],
             default_title: "test".into(),
             announcement_channel_id: None,
+            share_channel_id: None,
             screenshots: false,
         };
         let mut data = json!({"channels":[{"id":"2","name":"雑談"}],
@@ -624,6 +628,7 @@ mod tests {
             voice_channel_ids: vec!["10".into(), "11".into()],
             default_title: "test".into(),
             announcement_channel_id: None,
+            share_channel_id: None,
             screenshots: false,
         };
         let data = json!({"id":"1",
@@ -662,6 +667,7 @@ mod tests {
             voice_channel_ids: vec!["2".into()],
             default_title: "test".into(),
             announcement_channel_id: None,
+            share_channel_id: None,
             screenshots: false,
         };
         let data = json!({"channels":[{"id":"2"}],"members":[{"user":{"id":"3","username":"name"},"nick":"nickname"},{"user":{"id":"4","bot":true}}],"voice_states":[{"user_id":"3","channel_id":"2","session_id":"s","self_stream":true},{"user_id":"4","channel_id":"2","session_id":"b","self_stream":true},{"user_id":"5","channel_id":"9","session_id":"x","self_stream":true}]});

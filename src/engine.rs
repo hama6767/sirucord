@@ -39,6 +39,8 @@ pub struct Entry {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Pending {
     #[serde(default)]
+    pub shared_message: bool,
+    #[serde(default)]
     pub avatars: Vec<crate::avatars::Avatar>,
     #[serde(default)]
     pub metadata_fingerprint: Option<String>,
@@ -80,6 +82,10 @@ impl App {
             let Some((guild, user)) = key.split_once(':') else {
                 bail!("Malformed state target");
             };
+            // Shared-message cursors/outboxes are independent of voice sessions.
+            if user.starts_with("share-") {
+                continue;
+            }
             if let Some(server) = self.config.servers.iter().find(|s| s.guild_id == guild) {
                 observed.insert(
                     key.clone(),
@@ -115,6 +121,11 @@ impl App {
         let contexts: Vec<_> = observed
             .values()
             .filter_map(|(_, voice)| voice.as_ref().filter(|v| v.self_stream)?.context.as_ref())
+            .collect();
+        let occupied_guilds = observed
+            .values()
+            .filter(|(_, voice)| voice.is_some())
+            .map(|(target, _)| target.guild_id.clone())
             .collect();
         if !contexts.is_empty() {
             println!(
@@ -198,6 +209,7 @@ impl App {
                     continue;
                 }
                 let pending = Pending {
+                    shared_message: false,
                     avatars: if context.participants >= 2 {
                         context.avatars.clone()
                     } else {
@@ -256,6 +268,7 @@ impl App {
                 format!("📷 {name} さんから配信スクリーンショット\n内容：{title}")
             };
             let pending = Pending {
+                shared_message: false,
                 avatars: Vec::new(),
                 metadata_fingerprint: None,
                 key: uuid::Uuid::new_v4().to_string(),
@@ -271,6 +284,8 @@ impl App {
             }
             self.deliver(&mut state, &key, dry_run).await?;
         }
+        self.share_updates(&mut state, &occupied_guilds, dry_run)
+            .await?;
         Ok(active > 0 || occupied > 0)
     }
 
@@ -297,7 +312,9 @@ impl App {
             // Do not put names, IDs, captions or screenshot URLs into public Actions logs.
             println!(
                 "Dry run: would publish {} (content redacted).",
-                if pending.is_start {
+                if pending.shared_message {
+                    "shared channel message"
+                } else if pending.is_start {
                     "start announcement"
                 } else if pending.metadata_fingerprint.is_some() {
                     "stream information update"
@@ -357,7 +374,9 @@ impl App {
         self.store.save(state).await?;
         println!(
             "Published {} successfully.",
-            if pending.is_start {
+            if pending.shared_message {
+                "shared channel message"
+            } else if pending.is_start {
                 "start announcement"
             } else if pending.metadata_fingerprint.is_some() {
                 "stream information update"

@@ -1,7 +1,7 @@
 //! Participant portraits come only from Discord's CDN; no authenticated CDN requests.
 use anyhow::{Context, Result, ensure};
 use futures_util::{StreamExt, stream};
-use image::{DynamicImage, ImageFormat, ImageReader, Rgba, RgbaImage};
+use image::{ImageReader, Rgba, RgbaImage};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{io::Cursor, time::Duration};
@@ -10,6 +10,10 @@ use std::{io::Cursor, time::Duration};
 pub struct Avatar {
     pub name: String,
     pub url: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub streaming: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub game: Option<String>,
 }
 
 fn hash(s: &str) -> bool {
@@ -49,6 +53,8 @@ pub fn member_avatar(member: &Value, guild: &str) -> Result<Avatar> {
             60,
         ),
         url: format!("https://cdn.discordapp.com/{path}?size=128"),
+        streaming: false,
+        game: None,
     })
 }
 
@@ -125,25 +131,6 @@ fn placeholder() -> RgbaImage {
     })
 }
 
-fn compose(images: &[RgbaImage]) -> Result<Vec<u8>> {
-    ensure!(
-        (2..=256).contains(&images.len()),
-        "Avatar grid requires 2–256 participants"
-    );
-    let columns = (images.len() as u32).min(8);
-    let rows = (images.len() as u32).div_ceil(columns);
-    let mut canvas =
-        RgbaImage::from_pixel(columns * 144 + 16, rows * 144 + 16, Rgba([30, 33, 40, 255]));
-    for (index, avatar) in images.iter().enumerate() {
-        let left = (index as u32 % columns) * 144 + 16;
-        let top = (index as u32 / columns) * 144 + 16;
-        image::imageops::overlay(&mut canvas, avatar, left.into(), top.into());
-    }
-    let mut output = Cursor::new(Vec::new());
-    DynamicImage::ImageRgba8(canvas).write_to(&mut output, ImageFormat::Png)?;
-    Ok(output.into_inner())
-}
-
 pub async fn collage(client: &reqwest::Client, avatars: &[Avatar]) -> Result<(Vec<u8>, String)> {
     ensure!(
         (2..=256).contains(&avatars.len()),
@@ -165,12 +152,29 @@ pub async fn collage(client: &reqwest::Client, avatars: &[Avatar]) -> Result<(Ve
         missing
     );
     let description = format!(
-        "通話参加者のアイコン（左から右、上から下）：{}{}",
+        "通話参加者（左から右、上から下）：{}。{}{}",
         avatars
             .iter()
             .map(|a| a.name.as_str())
             .collect::<Vec<_>>()
             .join("、"),
+        avatars
+            .iter()
+            .map(|a| format!(
+                "{}：{}{}",
+                a.name,
+                if a.streaming {
+                    "配信中"
+                } else {
+                    "通話中"
+                },
+                a.game
+                    .as_ref()
+                    .map(|game| format!("、プレイ中：{game}"))
+                    .unwrap_or_default()
+            ))
+            .collect::<Vec<_>>()
+            .join("。"),
         if missing > 0 {
             "。取得できないアイコンは灰色の人型で表示"
         } else {
@@ -179,7 +183,8 @@ pub async fn collage(client: &reqwest::Client, avatars: &[Avatar]) -> Result<(Ve
     );
     let description: String = description.chars().take(1500).collect();
     Ok((
-        compose(
+        crate::card::render(
+            avatars,
             &images
                 .into_iter()
                 .map(|(image, _)| image)
@@ -232,22 +237,5 @@ mod tests {
             assert!(validate_url(url).is_err());
         }
         assert!(validate_url(&member_avatar(&m, "10").unwrap().url).is_ok());
-    }
-    #[test]
-    fn grid_preserves_every_participant_and_order() {
-        let images: Vec<_> = (0..10)
-            .map(|n| RgbaImage::from_pixel(128, 128, Rgba([n, 10, 20, 255])))
-            .collect();
-        let rendered = image::load_from_memory(&compose(&images).unwrap())
-            .unwrap()
-            .into_rgba8();
-        assert_eq!(rendered.dimensions(), (1168, 304));
-        for n in 0..10 {
-            assert_eq!(
-                rendered.get_pixel((n % 8) * 144 + 30, (n / 8) * 144 + 30)[0],
-                n as u8
-            );
-        }
-        assert!(compose(&[]).is_err());
     }
 }

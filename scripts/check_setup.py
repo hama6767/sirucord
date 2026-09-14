@@ -45,7 +45,7 @@ def main():
     print("Bot installation link: " + invite)
     print("Bot settings: https://discord.com/developers/applications/" + application_id + "/bot")
     targets = config.get("servers", []) + config.get("streamers", [])
-    message_content = any(t.get("announcement_channel_id") and not t.get("use_activity") for t in targets)
+    message_content = any(t.get("share_channel_id") or (t.get("announcement_channel_id") and not t.get("use_activity")) for t in targets)
     presence = any(t.get("use_activity") for t in targets)
     flags = int(app.get("flags", 0))
     required = 0
@@ -88,6 +88,17 @@ def main():
                 status, _ = request("/channels/" + channel + "/messages?limit=1")
                 if status != 200:
                     print(f"Target {number}: cannot read announcement history (HTTP {status}).")
+                    issues += 1
+        channel = target.get("share_channel_id")
+        if channel:
+            status, data = request("/channels/" + channel)
+            if status != 200 or data.get("guild_id") != target["guild_id"] or data.get("type") not in (0, 5):
+                print(f"Target {number}: share channel is missing, inaccessible or in another server (HTTP {status}).")
+                issues += 1
+            else:
+                status, _ = request("/channels/" + channel + "/messages?limit=1")
+                if status != 200:
+                    print(f"Target {number}: cannot read share channel history (HTTP {status}).")
                     issues += 1
     print("Setup checks passed." if not issues else f"Setup needs attention: {issues} issue(s).")
     return 1 if issues else 0

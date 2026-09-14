@@ -52,10 +52,20 @@ impl StreamContext {
                 continue;
             }
             let id = member["user"]["id"].as_str().context("Missing member ID")?;
-            roster.push((
-                id,
-                crate::avatars::member_avatar(member, data["id"].as_str().unwrap_or(""))?,
-            ));
+            let mut avatar =
+                crate::avatars::member_avatar(member, data["id"].as_str().unwrap_or(""))?;
+            avatar.streaming = voice["self_stream"] == true;
+            // Reuse the existing Presence snapshot: no extra REST calls or text reads.
+            avatar.game = data["presences"]
+                .as_array()
+                .and_then(|items| items.iter().find(|p| p["user"]["id"] == id))
+                .and_then(|presence| presence["activities"].as_array())
+                .into_iter()
+                .flatten()
+                .filter(|activity| activity["type"].as_u64() == Some(0))
+                .filter_map(|activity| text(&activity["name"], 70))
+                .min();
+            roster.push((id, avatar));
         }
         roster.sort_by_key(|(id, _)| *id);
         let avatars: Vec<_> = roster.into_iter().map(|(_, avatar)| avatar).collect();
@@ -123,7 +133,6 @@ impl StreamContext {
         } else if self.activities.is_empty() {
             lines.push("共有アプリの情報はDiscordから取得できませんでした".into());
         } else {
-            lines.push("Discordのアクティビティ（共有画面とは一致しない場合があります）".into());
             for a in &self.activities {
                 let label = match a.kind {
                     0 => "プレイ中",
@@ -221,6 +230,34 @@ mod tests {
     fn guild() -> Value {
         json!({"channels":[{"id":"10","name":"Games"}],"members":[{"user":{"id":"20"}},{"user":{"id":"21","bot":true}}],"voice_states":[{"user_id":"20","channel_id":"10"},{"user_id":"21","channel_id":"10"}],"presences":[{"user":{"id":"20"},"activities":[{"type":0,"name":"Game","details":"Ranked match","state":"Map A","timestamps":{"start":1000},"party":{"id":"secret-party","size":[2,4]},"secrets":{"join":"secret-join"},"application_id":"30","assets":{"large_image":"40","large_text":"Round 2"}},{"type":2,"name":"private listening"}]}]})
     }
+    #[test]
+    fn participant_cards_track_each_person_game_and_stream_state() {
+        let mut data = guild();
+        data["members"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"user":{"id":"22","username":"Friend"}}));
+        data["voice_states"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"user_id":"22","channel_id":"10","self_stream":true}));
+        data["presences"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"user":{"id":"22"},"activities":[
+            {"type":2,"name":"Private listening"},{"type":0,"name":"Minecraft"}]}));
+        let context = StreamContext::from_guild(&data, "20", "10").unwrap();
+        assert_eq!(context.avatars[0].game.as_deref(), Some("Game"));
+        assert!(!context.avatars[0].streaming);
+        assert_eq!(context.avatars[1].game.as_deref(), Some("Minecraft"));
+        assert!(context.avatars[1].streaming);
+        assert!(
+            !context
+                .render("User", true)
+                .contains("Discordのアクティビティ")
+        );
+    }
+
     #[test]
     fn extracts_automatic_details_without_unrelated_activity_or_secrets() {
         let mut data = guild();

@@ -47,6 +47,8 @@ jobs:
           mkdir dist
           cp target/release/sirucord dist/
           cp README.md config.example.toml LICENSE dist/
+          mkdir -p dist/font-license
+          cp assets/fonts/OFL.txt assets/fonts/NOTICE.md dist/font-license/
           tar -czf sirucord-linux-x86_64.tar.gz -C dist .
       - name: Package Windows
         if: runner.os == 'Windows'
@@ -54,6 +56,8 @@ jobs:
         run: |
           New-Item -ItemType Directory dist | Out-Null
           Copy-Item target/release/sirucord.exe, README.md, config.example.toml, LICENSE dist/
+          New-Item -ItemType Directory dist/font-license | Out-Null
+          Copy-Item assets/fonts/OFL.txt, assets/fonts/NOTICE.md dist/font-license/
           Compress-Archive -Path dist/* -DestinationPath sirucord-windows-x86_64.zip
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
