@@ -20,7 +20,8 @@ def sync(occupied, request):
         request("PUT", "/enable")
     elif not occupied and state == "active":
         request("PUT", "/disable")
-    print("Polling interval: 5 minutes (occupied)." if occupied else "Polling interval: 30 minutes (empty).")
+    print("Configured polling interval: 5 minutes (occupied)." if occupied else "Configured polling interval: 30 minutes (empty).")
+    print("This confirms configuration only; GitHub schedule delivery may be delayed or dropped.")
 
 
 def main():

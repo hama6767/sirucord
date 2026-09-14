@@ -1,0 +1,23 @@
+name: Diagnose automatic execution
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Compare configured monitoring with actual scheduled runs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SIRUCORD_ENABLED: ${{ vars.SIRUCORD_ENABLED }}
+        run: python3 scripts/check_schedule.py
