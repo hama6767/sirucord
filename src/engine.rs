@@ -58,7 +58,8 @@ pub struct App {
 }
 
 impl App {
-    pub async fn run(&mut self, dry_run: bool) -> Result<()> {
+    /// Returns whether any configured target is occupied after a complete check.
+    pub async fn run(&mut self, dry_run: bool) -> Result<bool> {
         let mut state = self.store.load().await?;
         self.mastodon.verify().await?;
         let mut observed: BTreeMap<String, (Streamer, Option<Voice>)> = BTreeMap::new();
@@ -270,7 +271,7 @@ impl App {
             }
             self.deliver(&mut state, &key, dry_run).await?;
         }
-        Ok(())
+        Ok(active > 0 || occupied > 0)
     }
 
     pub async fn deliver(&mut self, state: &mut State, key: &str, dry_run: bool) -> Result<()> {

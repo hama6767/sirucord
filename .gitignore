@@ -3,3 +3,5 @@
 /.env
 /state.enc
 *.tmp
+/occupancy.json
+__pycache__/

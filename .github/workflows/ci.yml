@@ -36,6 +36,9 @@ jobs:
           cargo +1.98.1 test --locked
           cargo +1.98.1 run --locked -- --config config.example.toml check
           cargo +1.98.1 build --release --locked
+      - name: Test adaptive schedule controller
+        if: runner.os == 'Linux'
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
       - name: Package Linux
         if: runner.os == 'Linux'
         shell: bash

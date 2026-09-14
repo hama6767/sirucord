@@ -11,47 +11,12 @@ on:
 
 permissions:
   contents: write
-
-# All state writers must use this group. Never cancel a posting process.
-concurrency:
-  group: sirucord-monitor
-  cancel-in-progress: false
+  actions: write
 
 jobs:
-  announce:
+  monitor:
     if: vars.SIRUCORD_ENABLED == 'true' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 8
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Fetch the versioned release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
-          mkdir -p download bin
-          gh release download "v$version" --pattern sirucord-linux-x86_64.tar.gz --pattern SHA256SUMS --dir download
-          (cd download && sha256sum --check --ignore-missing SHA256SUMS)
-          tar -xzf download/sirucord-linux-x86_64.tar.gz -C bin
-      - name: Check and announce
-        env:
-          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
-          MASTODON_ACCESS_TOKEN: ${{ secrets.MASTODON_ACCESS_TOKEN }}
-          SIRUCORD_CONFIG: ${{ secrets.SIRUCORD_CONFIG }}
-          SIRUCORD_STATE_KEY: ${{ secrets.SIRUCORD_STATE_KEY }}
-          GITHUB_TOKEN: ${{ github.token }}
-          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
-        run: |
-          set -euo pipefail
-          for name in DISCORD_BOT_TOKEN MASTODON_ACCESS_TOKEN SIRUCORD_CONFIG SIRUCORD_STATE_KEY; do
-            if [ -z "${!name}" ]; then echo "::error::Missing secret: $name"; exit 1; fi
-          done
-          bin/sirucord check
-          if [ "$DRY_RUN" = true ]; then
-            bin/sirucord --github-state run --dry-run
-          else
-            bin/sirucord --github-state run
-          fi
+    uses: ./.github/workflows/monitor-run.yml
+    with:
+      dry_run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+    secrets: inherit

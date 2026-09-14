@@ -76,7 +76,7 @@ async fn start_restart_and_channel_move_do_not_duplicate() {
         .await;
     app.run(false).await.unwrap();
     live(&server, "3").await;
-    app.run(false).await.unwrap();
+    assert!(app.run(false).await.unwrap()); // Still occupied even with no new post.
     let mut restarted = App {
         store: Store::new(Backend::Local(dir.path().join("state.enc")), "a test key"),
         ..app
@@ -162,7 +162,7 @@ async fn dry_run_neither_posts_nor_saves_state() {
     let dir = tempfile::tempdir().unwrap();
     let mut app = app(&server, &dir).await;
     live(&server, "3").await;
-    app.run(true).await.unwrap();
+    assert!(app.run(true).await.unwrap());
     assert!(!dir.path().join("state.enc").exists());
     assert!(
         server

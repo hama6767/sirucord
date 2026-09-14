@@ -533,6 +533,36 @@ mod tests {
         peer.await.unwrap();
     }
     #[test]
+    fn monitors_both_channels_and_keeps_the_remaining_occupied_channel() {
+        let server = Server {
+            guild_id: "1".into(),
+            use_activity: true,
+            voice_channel_ids: vec!["2".into(), "6".into()],
+            default_title: "test".into(),
+            announcement_channel_id: None,
+            screenshots: false,
+        };
+        let mut data = json!({"id":"1","channels":[{"id":"2","name":"A"},{"id":"6","name":"B"}],
+            "members":[{"user":{"id":"3","username":"Alice"}},{"user":{"id":"4","username":"Bob"}},{"user":{"id":"5","bot":true}}],
+            "voice_states":[{"user_id":"3","channel_id":"2","session_id":"a","self_stream":true},{"user_id":"4","channel_id":"6","session_id":"b"},{"user_id":"5","channel_id":"6","session_id":"bot"}]});
+        let found = parse_guild(&server, &data).unwrap();
+        assert_eq!(found.len(), 2);
+        assert!(
+            found
+                .iter()
+                .all(|(_, v)| v.context.as_ref().unwrap().participants == 1)
+        );
+        data["voice_states"].as_array_mut().unwrap().remove(0);
+        let found = parse_guild(&server, &data).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].1.channel_id.as_deref(), Some("6"));
+        data["voice_states"].as_array_mut().unwrap().remove(0);
+        assert!(parse_guild(&server, &data).unwrap().is_empty());
+        data["channels"].as_array_mut().unwrap().pop();
+        assert!(parse_guild(&server, &data).is_err());
+    }
+
+    #[test]
     fn occupied_channels_notify_without_streams_and_ignore_bots() {
         let server = Server {
             guild_id: "1".into(),

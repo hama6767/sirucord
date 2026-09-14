@@ -31,6 +31,9 @@ enum Command {
     Run {
         #[arg(long)]
         dry_run: bool,
+        /// Write a non-sensitive JSON occupancy report after a successful run.
+        #[arg(long)]
+        report: Option<PathBuf>,
     },
     /// List unresolved deliveries locally (contains Discord IDs; do not put in public logs).
     Pending,
@@ -128,7 +131,7 @@ async fn main() -> Result<()> {
             store.save(&state).await?;
             println!("Delivery resolution saved.");
         }
-        Command::Run { dry_run } => {
+        Command::Run { dry_run, report } => {
             let discord = Discord {
                 client: client.clone(),
                 base: "https://discord.com/api/v10".into(),
@@ -140,7 +143,7 @@ async fn main() -> Result<()> {
                 token: secret("MASTODON_ACCESS_TOKEN")?,
                 visibility: config.mastodon.visibility.clone(),
             };
-            App {
+            let occupied = App {
                 config,
                 discord,
                 mastodon,
@@ -148,6 +151,13 @@ async fn main() -> Result<()> {
             }
             .run(dry_run)
             .await?;
+            if let Some(path) = report {
+                std::fs::write(
+                    path,
+                    serde_json::to_vec(&serde_json::json!({"occupied": occupied}))?,
+                )
+                .context("Write occupancy report")?;
+            }
         }
     }
     Ok(())

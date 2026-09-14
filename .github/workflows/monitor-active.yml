@@ -1,0 +1,17 @@
+name: Active Discord checks
+on:
+  schedule:
+    # The base monitor supplies :17 and :47; together they check every 5 minutes.
+    - cron: '2,7,12,22,27,32,37,42,52,57 * * * *'
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  monitor:
+    if: vars.SIRUCORD_ENABLED == 'true'
+    uses: ./.github/workflows/monitor-run.yml
+    with:
+      dry_run: false
+    secrets: inherit
