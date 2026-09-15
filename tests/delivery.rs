@@ -656,6 +656,13 @@ async fn failed_shared_message_waits_for_occupancy_and_reuses_its_key() {
         .await
         .unwrap();
     assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    app.config.servers[0].share_channel_id = None;
+    app.share_updates(&mut restored, &occupied, false)
+        .await
+        .unwrap();
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    assert!(restored.entries["1:share-9"].pending.is_some());
+    app.config.servers[0].share_channel_id = Some("9".into());
     Mock::given(method("POST"))
         .and(path("/api/v1/statuses"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id":"shared"})))

@@ -64,6 +64,123 @@ fn rounded(canvas: &mut RgbaImage, rect: (u32, u32, u32, u32), radius: f32, colo
     }
 }
 
+fn neon_color(position: f32) -> [u8; 4] {
+    let t = position.clamp(0.0, 1.0);
+    let cyan = [60.0, 235.0, 255.0];
+    let pink = [237.0, 93.0, 255.0];
+    std::array::from_fn(|i| {
+        if i == 3 {
+            255
+        } else {
+            (cyan[i] * (1.0 - t) + pink[i] * t).round() as u8
+        }
+    })
+}
+
+/// Keep the energy effects above the labels; names and games retain a calm surface.
+fn live_effect(canvas: &mut RgbaImage, left: u32, top: u32) {
+    // A luminous frame with a soft halo, bounded by the existing card gutters.
+    for y in -7..CARD_HEIGHT as i32 + 7 {
+        for x in -7..CARD_WIDTH as i32 + 7 {
+            let qx =
+                (x as f32 + 0.5 - CARD_WIDTH as f32 / 2.0).abs() - CARD_WIDTH as f32 / 2.0 + 16.0;
+            let qy =
+                (y as f32 + 0.5 - CARD_HEIGHT as f32 / 2.0).abs() - CARD_HEIGHT as f32 / 2.0 + 16.0;
+            let edge = qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - 16.0;
+            let glow = 0.35 * (-edge.abs() / 3.2).exp();
+            let stroke = (1.7 - edge.abs()).clamp(0.0, 1.0);
+            blend(
+                canvas,
+                (left as i32 + x) as u32,
+                (top as i32 + y) as u32,
+                neon_color(x as f32 / CARD_WIDTH as f32),
+                glow.max(stroke),
+            );
+        }
+    }
+    // Avatar aura, two orbital rings and short radial bursts. Draw the avatar
+    // afterwards so the face is never washed out by a glow or a particle.
+    for y in 3..91 {
+        for x in 4..101 {
+            let dx = x as f32 + 0.5 - 52.0;
+            let dy = y as f32 + 0.5 - 52.0;
+            let radius = dx.hypot(dy);
+            let angle = dy.atan2(dx);
+            let color = neon_color((angle.sin() + 1.0) / 2.0);
+            let aura = 0.6 * (-(radius - 34.0).abs() / 6.0).exp();
+            let ring = (1.9 - (radius - 36.5).abs()).clamp(0.0, 1.0);
+            let orbit = if (angle * 3.0 + 0.7).sin() > -0.15 {
+                (1.3 - (radius - 42.5).abs()).clamp(0.0, 1.0) * 0.8
+            } else {
+                0.0
+            };
+            let rays = if (39.0..48.0).contains(&radius) {
+                (angle * 13.0).cos().max(0.0).powi(18) * 0.4
+            } else {
+                0.0
+            };
+            blend(
+                canvas,
+                left + x,
+                top + y,
+                color,
+                aura.max(ring).max(orbit).max(rays),
+            );
+        }
+    }
+    // Sparse four-point glints and a lightning motif in the unused upper corner.
+    for (cx, cy, size) in [
+        (19, 17, 5),
+        (86, 14, 4),
+        (91, 76, 5),
+        (277, 19, 5),
+        (258, 75, 3),
+    ] {
+        for dy in -size..=size {
+            for dx in -size..=size {
+                let distance = (dx as f32).abs().min((dy as f32).abs()) * 3.0
+                    + (dx as f32).abs().max((dy as f32).abs());
+                blend(
+                    canvas,
+                    (left as i32 + cx + dx) as u32,
+                    (top as i32 + cy + dy) as u32,
+                    [216, 252, 255, 255],
+                    (size as f32 + 0.5 - distance).clamp(0.0, 1.0),
+                );
+            }
+        }
+    }
+    let bolt = [(253.0, 17.0), (232.0, 43.0), (249.0, 39.0), (234.0, 65.0)];
+    for y in 11..72 {
+        for x in 225..261 {
+            let mut distance = f32::MAX;
+            for segment in bolt.windows(2) {
+                let (ax, ay) = segment[0];
+                let (bx, by) = segment[1];
+                let vx = bx - ax;
+                let vy = by - ay;
+                let t = (((x as f32 - ax) * vx + (y as f32 - ay) * vy) / (vx * vx + vy * vy))
+                    .clamp(0.0, 1.0);
+                distance = distance.min((x as f32 - ax - t * vx).hypot(y as f32 - ay - t * vy));
+            }
+            blend(
+                canvas,
+                left + x,
+                top + y,
+                [123, 139, 255, 255],
+                0.65 * (-distance / 3.5).exp(),
+            );
+            blend(
+                canvas,
+                left + x,
+                top + y,
+                [203, 245, 255, 255],
+                (2.0 - distance).clamp(0.0, 1.0),
+            );
+        }
+    }
+}
+
 // ab_glyph's scale measures ascent-to-descent; use em size for predictable Japanese text.
 fn scale(font: &FontRef<'_>, size: f32) -> f32 {
     size * font.height_unscaled() / font.units_per_em().unwrap_or(1000.0)
@@ -175,6 +292,9 @@ pub fn render(people: &[Avatar], images: &[RgbaImage]) -> Result<Vec<u8>> {
             16.0,
             SURFACE,
         );
+        if person.streaming {
+            live_effect(&mut canvas, left, top);
+        }
         let portrait =
             image::imageops::resize(avatar, 64, 64, image::imageops::FilterType::Triangle);
         for (x, y, pixel) in portrait.enumerate_pixels() {
@@ -192,7 +312,7 @@ pub fn render(people: &[Avatar], images: &[RgbaImage]) -> Result<Vec<u8>> {
                 &mut canvas,
                 (left + 104, top + 34, 98, 30),
                 15.0,
-                [72, 35, 44, 255],
+                [128, 37, 83, 255],
             );
             rounded(
                 &mut canvas,
@@ -207,7 +327,7 @@ pub fn render(people: &[Avatar], images: &[RgbaImage]) -> Result<Vec<u8>> {
                 (left + 130, top + 36),
                 16.0,
                 64.0,
-                [255, 163, 173, 255],
+                [255, 233, 245, 255],
             );
         } else {
             text(
